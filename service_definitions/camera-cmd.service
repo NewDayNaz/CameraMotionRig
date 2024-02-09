@@ -1,0 +1,9 @@
+[Unit]
+Description=Camera Cmd server node script
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/node /home/pi/cmd_server/server.js
+
+[Install]
+WantedBy=multi-user.target

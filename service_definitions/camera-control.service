@@ -1,0 +1,9 @@
+[Unit]
+Description=Camera Control python script
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /home/pi/camera_async/CameraController.py
+
+[Install]
+WantedBy=multi-user.target
