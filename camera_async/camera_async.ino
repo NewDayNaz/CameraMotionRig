@@ -222,6 +222,10 @@ void handle_data_input()
 {
   // Serial.print(sfReader);
 
+  if (sfReader == "info") {
+    Serial.println("main_module");
+  }
+
   // Pitch control
   if (sfReader == "a") {
     iStepperPitchMove = 1;

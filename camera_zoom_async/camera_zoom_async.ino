@@ -142,6 +142,10 @@ void handle_data_input()
 {
   // Serial.print(sfReader);
 
+  if (sfReader == "info") {
+    Serial.println("zoom_module");
+  }
+
   // Zoom control
   if (sfReader == "4") {
     iStepperZoomMove = 2;
