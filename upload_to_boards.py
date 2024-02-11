@@ -8,6 +8,10 @@ import re
 ARDUINO_CLI = "/home/pi/arduino-cli"
 ARDUINO_BAUDRATE = 115200
 
+# checkout latest from github
+subprocess.check_output(['git', 'pull'])
+subprocess.check_output(['git', 'checkout', 'main'])
+
 regex = r"^(\/dev\/tty.*?) .* (arduino:avr:uno)"
 
 cmd_ret = subprocess.check_output([ARDUINO_CLI, 'board', 'list', '--timeout', '5s'])
