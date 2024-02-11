@@ -9,6 +9,7 @@ ARDUINO_CLI = "/home/pi/arduino-cli"
 ARDUINO_BAUDRATE = 115200
 
 # checkout latest from github
+subprocess.check_output(['git', 'reset', '--hard'])
 subprocess.check_output(['git', 'pull'])
 subprocess.check_output(['git', 'checkout', 'main'])
 
