@@ -45,7 +45,7 @@ bool can_we_step_zoom(int interval) {
 }
 
 void step_zoom_stepper() {
-  if (digitalRead (StepZ) == HIGH) {
+  if (digitalRead(StepZ) == HIGH) {
     digitalWrite(StepZ, LOW);
   } else {
     digitalWrite(StepZ, HIGH);
@@ -97,13 +97,19 @@ void zero_zoom_pos()
 {
   digitalWrite(DirZ, HIGH); // zoom out
 
-  iStepperZoomPos = 0;
+  // iStepperZoomPos = 0;
+  // while (iStepperZoomPos < 1139) {
+  //   if (can_we_step_zoom(2000)) {
+  //     step_zoom_stepper();
+  //     iStepperZoomPos += 1;
+  //   }
+  // }
 
-  while (iStepperZoomPos < 1139) {
-    if (can_we_step_zoom(2000)) {
-      step_zoom_stepper();
-      iStepperZoomPos += 1;
-    }
+  for (int i = 0; i <= 1140; i++) {
+    digitalWrite(StepZ, HIGH);
+    delayMicroseconds(2000);
+    digitalWrite(StepZ, LOW);
+    delayMicroseconds(2000);
   }
 
   iStepperZoomPos = 0;
