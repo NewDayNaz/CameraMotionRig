@@ -41,7 +41,7 @@ void setup()
 }
 
 bool can_we_step_zoom(int interval) {
-  return ((millis() - StepTimer) >= interval)
+  return ((millis() - StepTimer) >= interval);
 }
 
 void step_zoom_stepper() {
@@ -105,7 +105,7 @@ void zero_zoom_pos()
       iStepperZoomPos += 1;
     }
   }
-  
+
   iStepperZoomPos = 0;
 }
 
