@@ -5,9 +5,7 @@ const int DirZ = 7;
 
 createSafeStringReader(sfReader, 16, " "); // a reader for upto 20 chars to read tokens terminated by space or timeout
 
-// millisDelay pitchDelay;
-// millisDelay yawDelay;
-// millisDelay zoomDelay;
+unsigned long StepTimer;
 
 // HOW TO SWITCH TO TIMERS??
 //  Have a function dedicated to just pulses and the timers are constant for high/low
@@ -31,6 +29,8 @@ void setup()
   pinMode(StepZ, OUTPUT);
   pinMode(DirZ, OUTPUT);
 
+  StepTimer = millis();
+
   zero_zoom_pos();
 
   Serial.begin(115200); // begin transmission
@@ -38,6 +38,20 @@ void setup()
   sfReader.setTimeout(1000); // set 1 sec timeout
   sfReader.flushInput(); // empty Serial RX buffer and then skip until either find delimiter or timeout
   sfReader.connect(Serial); // read from Serial
+}
+
+bool can_we_step_zoom(int interval) {
+  return ((millis() - StepTimer) >= interval)
+}
+
+void step_zoom_stepper() {
+  if (digitalRead (StepZ) == HIGH) {
+    digitalWrite(StepZ, LOW);
+  } else {
+    digitalWrite(StepZ, HIGH);
+  }
+
+  StepTimer = millis();
 }
 
 int iStepperSpeedRamp = 0;
@@ -83,13 +97,15 @@ void zero_zoom_pos()
 {
   digitalWrite(DirZ, HIGH); // zoom out
 
-  for (int i = 0; i <= 1140; i++) {
-    digitalWrite(StepZ, HIGH);
-    delayMicroseconds(2000);
-    digitalWrite(StepZ, LOW);
-    delayMicroseconds(2000);
-  }
+  iStepperZoomPos = 0;
 
+  while (iStepperZoomPos < 1139) {
+    if (can_we_step_zoom(2000)) {
+      step_zoom_stepper();
+      iStepperZoomPos += 1;
+    }
+  }
+  
   iStepperZoomPos = 0;
 }
 
