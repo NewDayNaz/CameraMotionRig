@@ -5,7 +5,7 @@ import serial
 import subprocess
 import re
 
-ARDUINO_CLI = "/home/pi/arduino-cli"
+ARDUINO_CLI = "/home/jonbons/CameraMotionRig/arduino-cli"
 ARDUINO_BAUDRATE = 115200
 
 # checkout latest from github

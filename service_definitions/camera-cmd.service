@@ -3,7 +3,8 @@ Description=Camera Cmd server node script
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/node /home/pi/cmd_server/server.js
+Environment="CAMERA_CMD_FILE=/home/jonbons/CameraMotionRig/camera_async/send_cmd.txt"
+ExecStart=/usr/bin/node /home/jonbons/CameraMotionRig/cmd_server/server.js
 
 [Install]
 WantedBy=multi-user.target
