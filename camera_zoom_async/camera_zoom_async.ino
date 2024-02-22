@@ -77,7 +77,11 @@ void handle_zoom_stepper() {
 void zero_zoom_pos() {
   digitalWrite(DirZ, HIGH); // Zoom out
   for (int i =  0; i <=  1140; i++) {
-    step_zoom_stepper();
+    if (can_we_step_zoom(iStepperZoomSpeed)) {
+      step_zoom_stepper();
+    } else {
+      i--;
+    }
   }
   iStepperZoomPos =  0;
 }
