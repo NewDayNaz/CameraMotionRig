@@ -80,7 +80,7 @@ class JoystickController:
 
         self.ARDUINO_SELECTED_POS = 1
 
-    def handle_joystick_events(self, arduino_controller, arduino_zoom_controller, events):
+    def handle_gamepad_events(self, arduino_controller, arduino_zoom_controller, events):
         for event in events:
             self.process_key_events(event, arduino_controller, arduino_zoom_controller)
             self.process_absolute_events(event, arduino_controller, arduino_zoom_controller)
@@ -115,7 +115,7 @@ class JoystickController:
         if event.ev_type == "Absolute":
             self.handle_hat_events(event)
             self.handle_trigger_events(event)
-            self.handle_joystick_events(event)
+            self.handle_stick_events(event)
             self.handle_pitch_movement(arduino_controller, arduino_zoom_controller)
             self.handle_yaw_movement(arduino_controller, arduino_zoom_controller)
             self.handle_zoom_movement(arduino_controller, arduino_zoom_controller)
@@ -212,7 +212,7 @@ class JoystickController:
             elif event.state >= 100:
                 self.JOY_TRIGGER_R = event.state / 255
 
-    def handle_joystick_events(self, event):
+    def handle_stick_events(self, event):
         if event.code == "ABS_X":
             if event.state < self.JOY_DEADZONE and event.state > -self.JOY_DEADZONE:
                 self.JOY_X_LEFT = False
@@ -351,7 +351,7 @@ class JoystickController:
         while True:
             try:
                 events = get_gamepad()
-                self.handle_joystick_events(arduino_controller, arduino_zoom_controller, events)
+                self.handle_gamepad_events(arduino_controller, arduino_zoom_controller, events)
             except KeyboardInterrupt:
                 sys.exit(0)
 
