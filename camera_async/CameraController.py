@@ -1,7 +1,7 @@
 import time
 import sys
 import threading
-from inputs import get_gamepad 
+from inputs import get_gamepad
 import serial
 
 ARDUINO_PITCH_MAX_SPEED = 10000 * 1.3
@@ -28,47 +28,50 @@ ARDUINO_SELECTED_POS = 1
 
 ARDUINO_ENABLE_SERIAL = True
 
-ARDUINO_PORT = "/dev/ttyACM0" #put your port here
+ARDUINO_PORT = "/dev/ttyACM0"  # put your port here
 ARDUINO_BAUDRATE = 115200
 
-ARDUINO_ZOOM_PORT = "/dev/ttyACM1" #put your port here
+ARDUINO_ZOOM_PORT = "/dev/ttyACM1"  # put your port here
 
 arduino = None
 arduino_zoom = None
 if ARDUINO_ENABLE_SERIAL:
     arduino = serial.Serial(ARDUINO_PORT, ARDUINO_BAUDRATE)
     arduino_zoom = serial.Serial(ARDUINO_ZOOM_PORT, ARDUINO_BAUDRATE)
-    #arduino_zoom = arduino
+    # arduino_zoom = arduino
+
 
 def send_cmd(cmd):
     if ARDUINO_ENABLE_SERIAL:
-        arduino.write(cmd + b' ')
-        arduino_zoom.write(cmd + b' ')
+        arduino.write(cmd + b" ")
+        arduino_zoom.write(cmd + b" ")
+
 
 def tell_cmd(msg):
     if ARDUINO_ENABLE_SERIAL:
         msg = msg
-        x = msg.encode('ascii') # encode n send
+        x = msg.encode("ascii")  # encode n send
         arduino.write(x)
         arduino_zoom.write(x)
 
+
 if ARDUINO_ENABLE_SERIAL:
-    print('Waiting for serial connection...')
+    print("Waiting for serial connection...")
     time.sleep(10)
-    send_cmd(b'0')
+    send_cmd(b"0")
     time.sleep(0.1)
 
     pitch_speed = str(ARDUINO_PITCH_MAX_SPEED).encode()
     yaw_speed = str(ARDUINO_YAW_MAX_SPEED).encode()
-    
-    send_cmd(b'p') # set pitch step speed (higher is slower)
+
+    send_cmd(b"p")  # set pitch step speed (higher is slower)
     send_cmd(pitch_speed)
-    send_cmd(b'y') # set yaw step speed
+    send_cmd(b"y")  # set yaw step speed
     send_cmd(yaw_speed)
 
 JOY_MAX_VALUE = 32768
-JOY_DEADZONE = JOY_MAX_VALUE * .06 # deadzone after 9% of max is reached
-JOY_UPPER_RAMP = JOY_MAX_VALUE * .98 # jump to max after 95% of max is reached
+JOY_DEADZONE = JOY_MAX_VALUE * 0.06  # deadzone after 9% of max is reached
+JOY_UPPER_RAMP = JOY_MAX_VALUE * 0.98  # jump to max after 95% of max is reached
 
 JOY_X_LEFT = False
 JOY_X_RIGHT = False
@@ -99,6 +102,7 @@ JOY_BUMPER_R = 0
 JOY_TRIGGER_L = 0
 JOY_TRIGGER_R = 0
 
+
 def thread_function(name):
     LAST_CMD = ""
     CUR_CMD = ""
@@ -109,8 +113,9 @@ def thread_function(name):
             if CUR_CMD != LAST_CMD and CUR_CMD != "":
                 LAST_CMD = CUR_CMD
                 print("send", CUR_CMD)
-                send_cmd(bytes(CUR_CMD, 'ascii'))
+                send_cmd(bytes(CUR_CMD, "ascii"))
         time.sleep(0.05)
+
 
 x = threading.Thread(target=thread_function, args=(1,))
 x.start()
@@ -118,7 +123,7 @@ x.start()
 # add zoom via triggers
 while True:
     try:
-        events = get_gamepad() #waits until a new event
+        events = get_gamepad()  # waits until a new event
         for event in events:
             print(event.ev_type, event.code, event.state)
             if event.ev_type == "Key":
@@ -141,43 +146,43 @@ while True:
 
                 if JOY_BACK != ARDUINO_BACK_LAST:
                     ARDUINO_BACK_LAST = JOY_BACK
-                    send_cmd(b'ea')
+                    send_cmd(b"ea")
 
                 if JOY_START != ARDUINO_START_LAST:
                     ARDUINO_START_LAST = JOY_START
-                    send_cmd(b'eb')
+                    send_cmd(b"eb")
 
                 if JOY_BUMPER_R != ARDUINO_BUMPER_R_LAST:
                     ARDUINO_BUMPER_R_LAST = JOY_BUMPER_R
-                    print('save position')
+                    print("save position")
                     if ARDUINO_SELECTED_POS == 1:
-                        send_cmd(b's')
+                        send_cmd(b"s")
                     if ARDUINO_SELECTED_POS == 2:
-                        send_cmd(b's2')
+                        send_cmd(b"s2")
                     if ARDUINO_SELECTED_POS == 3:
-                        send_cmd(b's3')
+                        send_cmd(b"s3")
                     if ARDUINO_SELECTED_POS == 4:
-                        send_cmd(b's4')
+                        send_cmd(b"s4")
                 if JOY_BUMPER_L != ARDUINO_BUMPER_L_LAST:
                     ARDUINO_BUMPER_L_LAST = JOY_BUMPER_L
-                    print('goto saved position')
+                    print("goto saved position")
                     if ARDUINO_SELECTED_POS == 1:
-                        send_cmd(b't')
+                        send_cmd(b"t")
                     if ARDUINO_SELECTED_POS == 2:
-                        send_cmd(b't2')
+                        send_cmd(b"t2")
                     if ARDUINO_SELECTED_POS == 3:
-                        send_cmd(b't3')
+                        send_cmd(b"t3")
                     if ARDUINO_SELECTED_POS == 4:
-                        send_cmd(b't4')
+                        send_cmd(b"t4")
 
                 if ARDUINO_PITCH_SPEED != ARDUINO_PITCH_SPEED_LAST:
                     ARDUINO_PITCH_SPEED_LAST = ARDUINO_PITCH_SPEED
-                    send_cmd(b'p') # set pitch step speed (higher is slower)
+                    send_cmd(b"p")  # set pitch step speed (higher is slower)
                     send_cmd(str(ARDUINO_PITCH_SPEED).encode())
 
                 if ARDUINO_YAW_SPEED != ARDUINO_YAW_SPEED_LAST:
                     ARDUINO_YAW_SPEED_LAST = ARDUINO_YAW_SPEED
-                    send_cmd(b'y') # set yaw step speed
+                    send_cmd(b"y")  # set yaw step speed
                     send_cmd(str(ARDUINO_YAW_SPEED).encode())
 
             if event.ev_type == "Absolute":
@@ -284,12 +289,12 @@ while True:
                 if ZOOM_MOVE != ARDUINO_ZOOM_LAST:
                     ARDUINO_ZOOM_LAST = ZOOM_MOVE
                     if ZOOM_MOVE == 1:
-                        send_cmd(b'4')
+                        send_cmd(b"4")
                     elif ZOOM_MOVE == 2:
-                        send_cmd(b'5')
+                        send_cmd(b"5")
                     else:
-                        send_cmd(b'6')
-                        send_cmd(b'6')
+                        send_cmd(b"6")
+                        send_cmd(b"6")
 
                 # send_cmd(b'p') # set pitch step speed (higher is slower)
                 # send_cmd(pitch_speed)
@@ -315,7 +320,7 @@ while True:
                     YAW_MOVE = 0
                     # send_cmd(b'3')
                 if JOY_X > 0:
-                    YAW_MOVE = 1 
+                    YAW_MOVE = 1
                     # send_cmd(b'1')
                     # send_cmd(("1" + ARDUINO_YAW_SPEED + ";").encode())
                 if JOY_X < 0:
@@ -326,26 +331,41 @@ while True:
                 if ARDUINO_PITCH_LAST != PITCH_MOVE:
                     ARDUINO_PITCH_LAST = PITCH_MOVE
                     if PITCH_MOVE == 1:
-                        send_cmd(b'a')
+                        send_cmd(b"a")
                     elif PITCH_MOVE == 2:
-                        send_cmd(b'b')
+                        send_cmd(b"b")
                     else:
-                        send_cmd(b'c')
-                        send_cmd(b'c')
+                        send_cmd(b"c")
+                        send_cmd(b"c")
 
                 if ARDUINO_YAW_LAST != YAW_MOVE:
                     ARDUINO_YAW_LAST = YAW_MOVE
                     if YAW_MOVE == 1:
-                        send_cmd(b'1')
+                        send_cmd(b"1")
                     elif YAW_MOVE == 2:
-                        send_cmd(b'2')
+                        send_cmd(b"2")
                     else:
-                        send_cmd(b'3')
-                        send_cmd(b'3')
+                        send_cmd(b"3")
+                        send_cmd(b"3")
 
                 # j,pitch,yaw,pitchSpeed,yawSpeed,zoom,zoomSpeed
                 # tell_cmd("j,{pitch},{yaw},{zoom},{pitch_speed}\n".format(pitch = PITCH_MOVE, yaw = YAW_MOVE, zoom = ZOOM_MOVE, pitch_speed = ARDUINO_PITCH_SPEED, yaw_speed = ARDUINO_YAW_SPEED, zoom_speed = ARDUINO_ZOOM_SPEED))
-                print("Joy | X:", JOY_X, "| Y:", JOY_Y, "| RX:", JOY_RX, "| RY:", JOY_RY, "| Pitch:", ARDUINO_PITCH_SPEED, "| Yaw:", ARDUINO_YAW_SPEED, "| Zoom:", ZOOM_MOVE)
+                print(
+                    "Joy | X:",
+                    JOY_X,
+                    "| Y:",
+                    JOY_Y,
+                    "| RX:",
+                    JOY_RX,
+                    "| RY:",
+                    JOY_RY,
+                    "| Pitch:",
+                    ARDUINO_PITCH_SPEED,
+                    "| Yaw:",
+                    ARDUINO_YAW_SPEED,
+                    "| Zoom:",
+                    ZOOM_MOVE,
+                )
                 # print(event.ev_type, event.code, event.state)
 
     except KeyboardInterrupt:
