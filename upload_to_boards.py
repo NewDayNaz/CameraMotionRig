@@ -1,6 +1,4 @@
 import time
-import sys
-import threading 
 import serial
 import subprocess
 import re
@@ -9,14 +7,14 @@ ARDUINO_CLI = "/home/jonbons/CameraMotionRig/arduino-cli"
 ARDUINO_BAUDRATE = 115200
 
 # checkout latest from github
-subprocess.check_output(['git', 'reset', '--hard'])
-subprocess.check_output(['git', 'pull'])
-subprocess.check_output(['git', 'checkout', 'main'])
+subprocess.check_output(["git", "reset", "--hard"])
+subprocess.check_output(["git", "pull"])
+subprocess.check_output(["git", "checkout", "main"])
 
 regex = r"^(\/dev\/tty.*?) .* (arduino:avr:uno)"
 
-cmd_ret = subprocess.check_output([ARDUINO_CLI, 'board', 'list', '--timeout', '5s'])
-cmd_ret = cmd_ret.decode('utf-8').split('\n')
+cmd_ret = subprocess.check_output([ARDUINO_CLI, "board", "list", "--timeout", "5s"])
+cmd_ret = cmd_ret.decode("utf-8").split("\n")
 serial_ports = []
 
 for line in cmd_ret:
@@ -31,8 +29,8 @@ arduino_modules = []
 for port in serial_ports:
     arduino = serial.Serial(port, ARDUINO_BAUDRATE)
     time.sleep(1)
-    arduino.write(bytes('info', 'ascii') + b' ')
-    ser_read = arduino.readline().decode('utf-8').split("\r\n")
+    arduino.write(bytes("info", "ascii") + b" ")
+    ser_read = arduino.readline().decode("utf-8").split("\r\n")
     arduino = None
     time.sleep(1)
     arduino_modules.append((port, ser_read[0]))
@@ -51,20 +49,28 @@ for arduino in arduino_modules:
     print("Uploading %s to %s..." % (code_module, port))
 
     compile_builder = [
-        ARDUINO_CLI, 'compile', code_module,
-        '--fqbn', 'arduino:avr:uno',
-        '-p', port
+        ARDUINO_CLI,
+        "compile",
+        code_module,
+        "--fqbn",
+        "arduino:avr:uno",
+        "-p",
+        port,
     ]
-    
+
     compile_cmd = subprocess.check_output(compile_builder)
-    print(compile_cmd.decode('utf-8'))
+    print(compile_cmd.decode("utf-8"))
 
     upload_builder = [
-        ARDUINO_CLI, 'upload', code_module,
-        '--fqbn', 'arduino:avr:uno',
-        '-p', port
+        ARDUINO_CLI,
+        "upload",
+        code_module,
+        "--fqbn",
+        "arduino:avr:uno",
+        "-p",
+        port,
     ]
     upload_cmd = subprocess.check_output(upload_builder)
-    print(upload_cmd.decode('utf-8'))
+    print(upload_cmd.decode("utf-8"))
 
 print("Done")
