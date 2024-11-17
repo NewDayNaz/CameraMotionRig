@@ -10,19 +10,19 @@ async function init() {
         if (msg.velocity > 0) {
             if (msg.note == 1) {
                 await sleep(400);
-                request(url + '?cmd=t', { json: true }, (err, res, body) => {});
+                request(url + '?cmd=m', { json: true }, (err, res, body) => {});
             }
             if (msg.note == 2) {
                 await sleep(400);
-                request(url + '?cmd=t2', { json: true }, (err, res, body) => {});
+                request(url + '?cmd=m2', { json: true }, (err, res, body) => {});
             }
             if (msg.note == 4) {
                 await sleep(400);
-                request(url + '?cmd=t3', { json: true }, (err, res, body) => {});
+                request(url + '?cmd=m3', { json: true }, (err, res, body) => {});
             }
             if (msg.note == 3) {
                 await sleep(400);
-                request(url + '?cmd=t4', { json: true }, (err, res, body) => {});
+                request(url + '?cmd=m4', { json: true }, (err, res, body) => {});
             }
             console.log(msg);
         }
