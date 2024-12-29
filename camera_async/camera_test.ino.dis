@@ -43,13 +43,13 @@ int ZeroStepperStarted = 0;
 
 Scheduler runner;
 
-#define T1_INIT (500L)
+#define T1_INIT (100L)
 unsigned long t1_interval = T1_INIT;
 #define T2_INIT (99L)
 unsigned long t2_interval = T2_INIT;
 #define T3_INIT (99L)
 unsigned long t3_interval = T3_INIT;
-#define T4_INIT (1000L)
+#define T4_INIT (500L)
 unsigned long t4_interval = T4_INIT;
 
 // Callback methods prototypes
@@ -107,12 +107,6 @@ void stepXCallback() {
     unsigned long t = micros();
     unsigned long elapsed_time = t - t2_time;
 
-    // get commanded input and direction
-    // use t2_time compared against micros to enforce a step speed of 2500 
-    // via taking into account the t1 task's t1_interval which is the minimum interval at which all stepper motors are stepped
-    // it needs to set bRunStepX to true until the the next iteration of t1 task's interval and then set bRunStepX to false and then wait until enough iterations of the t1 task
-    // that 2500 microseconds has passed before going back through to steps of setting bRunStepX and waiting again
-
      // Enforce a step speed of 2500 microseconds
     if (elapsed_time >= 2500) {
         // Toggle the step state (high/low)
@@ -150,8 +144,8 @@ void stepYCallback() {
     // it needs to set bRunStepX to true until the the next iteration of t1 task's interval and then set bRunStepX to false and then wait until enough iterations of the t1 task
     // that 2500 microseconds has passed before going back through to steps of setting bRunStepX and waiting again
 
-     // Enforce a step speed of 2500 microseconds
-    if (elapsed_time >= 2500) {
+     // Enforce a step speed of 2000 microseconds
+    if (elapsed_time >= 2000) {
         // Toggle the step state (high/low)
         bStepYHigh = !bStepYHigh;
 
