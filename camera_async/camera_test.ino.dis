@@ -1,0 +1,301 @@
+#define _TASK_MICRO_RES
+#include <TaskScheduler.h>
+
+#include "SafeStringReader.h"
+
+createSafeStringReader(sfReader, 16, " "); // a reader for upto 20 chars to read tokens terminated by space or timeout
+
+const int StepX = 2;
+const int DirX = 5;
+const int StepY = 3;
+const int DirY = 6;
+
+const int EndstopX = 9;
+const int EndstopY = 10;
+
+const int EndstopDefaultPos = 0;
+
+int BlockUserInput = 0;
+int SetpointStarted = 0;
+int StoredPitchSpeed = 2000 * 1.5;
+int StoredYawSpeed = 2000 * 1;
+int TargetPitchPos = 0;
+int TargetYawPos = 0;
+int StoredPitchPos = 0;
+int StoredYawPos = 0;
+int StoredPitchPosB = 0;
+int StoredYawPosB = 0;
+int StoredPitchPosC = 0;
+int StoredYawPosC = 0;
+int StoredPitchPosD = 0;
+int StoredYawPosD = 0;
+
+int iStepperSpeedRamp = 0;
+int iStepperPitchSpeed = 2000;
+int iStepperPitchMove = 0;
+int iStepperPitchPos = EndstopDefaultPos; // 10000 is default zero pos
+
+int iStepperYawSpeed = 1800 * 4;
+int iStepperYawMove = 0;
+int iStepperYawPos = EndstopDefaultPos;
+
+int ZeroStepperStarted = 0;
+
+Scheduler runner;
+
+#define T1_INIT (500L)
+unsigned long t1_interval = T1_INIT;
+#define T2_INIT (99L)
+unsigned long t2_interval = T2_INIT;
+#define T3_INIT (99L)
+unsigned long t3_interval = T3_INIT;
+#define T4_INIT (1000L)
+unsigned long t4_interval = T4_INIT;
+
+// Callback methods prototypes
+void stepperCallback();
+void stepXCallback();
+void stepYCallback();
+void serialCallback();
+
+Task t1(t1_interval, TASK_FOREVER, &stepperCallback, &runner, true);  // stepper task
+Task t2(t2_interval, TASK_FOREVER, &stepXCallback, &runner, true);  // step X control task
+Task t3(t3_interval, TASK_FOREVER, &stepYCallback, &runner, true);  // step Y control task
+Task t4(t4_interval, TASK_FOREVER, &serialCallback, &runner, true);  // serial task
+
+bool bRunStepX = false;
+bool bRunStepY = false;
+
+bool bStepXHigh = false;
+bool bStepYHigh = false;
+bool bDirXHigh = false;
+bool bDirYHigh = false;
+
+unsigned long t1_time = micros();
+void stepperCallback() {
+    if (bRunStepX) {
+        if (bDirXHigh) {
+            digitalWrite(DirX, HIGH);
+        } else {
+            digitalWrite(DirX, LOW);
+        }
+
+        if (bStepXHigh) {
+            digitalWrite(StepX, LOW);
+        } else {
+            digitalWrite(StepX, HIGH);
+        }
+    }
+
+    if (bRunStepY) {
+        if (bDirYHigh) {
+            digitalWrite(DirY, HIGH);
+        } else {
+            digitalWrite(DirY, LOW);
+        }
+
+        if (bStepYHigh) {
+            digitalWrite(StepY, HIGH);
+        } else {
+            digitalWrite(StepY, LOW);
+        }
+    }
+}
+
+unsigned long t2_time = micros();
+void stepXCallback() {
+    unsigned long t = micros();
+    unsigned long elapsed_time = t - t2_time;
+
+    // get commanded input and direction
+    // use t2_time compared against micros to enforce a step speed of 2500 
+    // via taking into account the t1 task's t1_interval which is the minimum interval at which all stepper motors are stepped
+    // it needs to set bRunStepX to true until the the next iteration of t1 task's interval and then set bRunStepX to false and then wait until enough iterations of the t1 task
+    // that 2500 microseconds has passed before going back through to steps of setting bRunStepX and waiting again
+
+     // Enforce a step speed of 2500 microseconds
+    if (elapsed_time >= 2500) {
+        // Toggle the step state (high/low)
+        bStepXHigh = !bStepXHigh;
+
+        // Determine the direction of the stepper motor based on iStepperPitchMove
+        if (iStepperPitchMove == 1) {
+            bDirXHigh = true;  // Move forward
+        } else if (iStepperPitchMove == 2) {
+            bDirXHigh = false; // Move backward
+        } else {
+            bRunStepX = false; // Stop stepping
+            return;
+        }
+
+        // Enable stepping for StepX
+        bRunStepX = true;
+
+        // Update the last execution time
+        t2_time = t;
+    } else {
+        // Disable stepping for StepX if enough time has not passed
+        bRunStepX = false;
+    }
+}
+
+unsigned long t3_time = micros();
+void stepYCallback() {
+    unsigned long t = micros();
+    unsigned long elapsed_time = t - t3_time;
+
+    // get commanded input and direction
+    // use t2_time compared against micros to enforce a step speed of 2500 
+    // via taking into account the t1 task's t1_interval which is the minimum interval at which all stepper motors are stepped
+    // it needs to set bRunStepX to true until the the next iteration of t1 task's interval and then set bRunStepX to false and then wait until enough iterations of the t1 task
+    // that 2500 microseconds has passed before going back through to steps of setting bRunStepX and waiting again
+
+     // Enforce a step speed of 2500 microseconds
+    if (elapsed_time >= 2500) {
+        // Toggle the step state (high/low)
+        bStepYHigh = !bStepYHigh;
+
+        // Determine the direction of the stepper motor based on iStepperYawMove
+        if (iStepperYawMove == 1) {
+            bDirYHigh = true;  // Move forward
+        } else if (iStepperYawMove == 2) {
+            bDirYHigh = false; // Move backward
+        } else {
+            bRunStepY = false; // Stop stepping
+            return;
+        }
+
+        // Enable stepping for StepY
+        bRunStepY = true;
+
+        // Update the last execution time
+        t3_time = t;
+    } else {
+        // Disable stepping for StepY if enough time has not passed
+        bRunStepY = false;
+    }
+}
+
+void serialCallback() {
+  if (sfReader.read()) { // got a line or timed out  delimiter is NOT returned
+    if (sfReader.hasError()) { // input length exceeded
+      // Serial.println(F(" sfReader hasError. Read '\\0' or input overflowed."));
+    }
+    if (sfReader.getDelimiter() == -1) { // no delimiter so timed out
+      // Serial.println(F(" Input timed out without space"));
+    }
+    // Serial.print(F(" got a line of input '")); Serial.print(sfReader); Serial.println("'");
+    handle_data_input();
+    if (sfReader == "flush") {
+      sfReader.flushInput();
+    }
+    // no need to clear sfReader as read() does that
+  }
+}
+
+void handle_data_input()
+{
+  // Serial.print(sfReader);
+
+  if (sfReader == "info") {
+    Serial.println("main_module");
+  }
+
+  // Pitch control
+  if (sfReader == "a") {
+    iStepperPitchMove = 1;
+  }
+  else if (sfReader == "b") {
+    iStepperPitchMove = 2;
+  }
+  else if (sfReader == "c") {
+    iStepperPitchMove = 0;
+  }
+
+  // Yaw control
+  if (sfReader == "1") {
+    iStepperYawMove = 1;
+  }
+  else if (sfReader == "2") {
+    iStepperYawMove = 2;
+  }
+  else if (sfReader == "3") {
+    iStepperYawMove = 0;
+  }
+
+  // Set/move to target
+  if (sfReader == "s") {
+    StoredPitchSpeed = iStepperPitchSpeed;
+    StoredYawSpeed = iStepperYawSpeed;
+    StoredPitchPos = iStepperPitchPos;
+    StoredYawPos = iStepperYawPos;
+  } else if (sfReader == "s2") {
+    StoredPitchSpeed = iStepperPitchSpeed;
+    StoredYawSpeed = iStepperYawSpeed;
+    StoredPitchPosB = iStepperPitchPos;
+    StoredYawPosB = iStepperYawPos;
+  } else if (sfReader == "s3") {
+    StoredPitchSpeed = iStepperPitchSpeed;
+    StoredYawSpeed = iStepperYawSpeed;
+    StoredPitchPosC = iStepperPitchPos;
+    StoredYawPosC = iStepperYawPos;
+  } else if (sfReader == "s4") {
+    StoredPitchSpeed = iStepperPitchSpeed;
+    StoredYawSpeed = iStepperYawSpeed;
+    StoredPitchPosD = iStepperPitchPos;
+    StoredYawPosD = iStepperYawPos;
+  } else if (sfReader == "t") {
+    SetpointStarted = 1;
+    iStepperPitchSpeed = 2000 * 1.5;
+    iStepperYawSpeed = 2000 * 1;
+  } else if (sfReader == "t2") {
+    SetpointStarted = 2;
+    iStepperPitchSpeed = 2000 * 1.5;
+    iStepperYawSpeed = 2000 * 1;
+  } else if (sfReader == "t3") {
+    SetpointStarted = 3;
+    iStepperPitchSpeed = 2000 * 1.5;
+    iStepperYawSpeed = 2000 * 1;
+  } else if (sfReader == "t4") {
+    SetpointStarted = 4;
+    iStepperPitchSpeed = 2000 * 1.5;
+    iStepperYawSpeed = 2000 * 1;
+  }
+
+  // Speed control
+  if (sfReader.startsWith("p")) {
+    sfReader.removeBefore(1);
+    sfReader.toInt(iStepperPitchSpeed);
+  } 
+  else if (sfReader.startsWith("y")) {
+    sfReader.removeBefore(1);
+    sfReader.toInt(iStepperYawSpeed);
+  } 
+}
+
+void setup () {
+  pinMode(StepX, OUTPUT);
+  pinMode(DirX, OUTPUT);
+  pinMode(StepY, OUTPUT);
+  pinMode(DirY, OUTPUT);
+
+  // pinMode(EndstopX, INPUT_PULLUP);
+  // pinMode(EndstopY, INPUT_PULLUP);
+
+  Serial.begin(115200); // begin transmission
+  SafeString::setOutput(Serial);
+  sfReader.setTimeout(1000); // set 1 sec timeout
+  sfReader.flushInput(); // empty Serial RX buffer and then skip until either find delimiter or timeout
+  sfReader.connect(Serial); // read from Serial
+  delay(100);
+   
+  runner.startNow(); // This creates a new scheduling starting point for all ACTIVE tasks. 
+                      // PLEASE NOTE - THIS METHOD DOES NOT ACTIVATE TASKS, JUST RESETS THE START TIME
+  t1.delay();
+  t2.delay();
+  t3.delay();
+}
+
+void loop () {
+  runner.execute();
+}
