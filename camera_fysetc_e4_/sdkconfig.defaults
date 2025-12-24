@@ -1,0 +1,21 @@
+# SDK Configuration defaults for FYSETC E4 PTZ Camera Rig
+# ESP32 configuration
+CONFIG_IDF_TARGET="esp32"
+
+# USB Serial configuration
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+
+# FreeRTOS configuration
+CONFIG_FREERTOS_HZ=1000
+
+# GPIO configuration
+CONFIG_GPIO_CTRL_FUNC_IN_IRAM=y
+
+# NVS configuration
+CONFIG_NVS_ENCRYPTION=y
+
+# Logger configuration
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_MAXIMUM_LEVEL_VERBOSE=y
+

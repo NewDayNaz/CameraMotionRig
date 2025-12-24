@@ -1,0 +1,27 @@
+idf_component_register(
+    SRCS 
+        "main.c"
+        "board.c"
+        "segment.c"
+        "stepper_executor.c"
+        "motion_planner.c"
+        "quintic.c"
+        "homing.c"
+        "preset_storage.c"
+        "usb_serial.c"
+        "motion_controller.c"
+        "tmc2209.c"
+        "wifi_manager.c"
+        "http_server.c"
+    INCLUDE_DIRS 
+        "."
+    PRIV_REQUIRES 
+        driver
+        nvs_flash
+        esp_timer
+        esp_wifi
+        esp_http_server
+        json
+        esp_netif
+)
+
