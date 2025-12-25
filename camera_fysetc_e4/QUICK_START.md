@@ -14,7 +14,7 @@
 
 2. **Navigate to project**
    ```cmd
-   cd path\to\camera_fysetc_e4_
+   cd path\to\camera_fysetc_e4
    ```
 
 3. **Build and flash (automated)**
@@ -39,7 +39,7 @@
 
 2. **Navigate to project**
    ```bash
-   cd path/to/camera_fysetc_e4_
+   cd path/to/camera_fysetc_e4
    ```
 
 3. **Make script executable and run**

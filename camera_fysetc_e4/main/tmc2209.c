@@ -293,6 +293,21 @@ bool tmc2209_init(uint8_t axis) {
     }
     vTaskDelay(pdMS_TO_TICKS(20));
     ESP_LOGI(TAG, "TMC2209 axis %d current set: IHOLD=3, IRUN=12 (low hold to prevent overheating)", axis);
+    
+    // Verify IHOLD_IRUN was written correctly
+    uint32_t verify_ihold_irun = 0;
+    if (tmc2209_read_register(axis, TMC2209_IHOLD_IRUN, &verify_ihold_irun)) {
+        uint8_t irun_verify = (verify_ihold_irun >> 8) & 0x1F;
+        uint8_t ihold_verify = (verify_ihold_irun >> 0) & 0x1F;
+        ESP_LOGI(TAG, "TMC2209 axis %d IHOLD_IRUN verify: IRUN=%d, IHOLD=%d", 
+                 axis, irun_verify, ihold_verify);
+        if (irun_verify != 12 || ihold_verify != 3) {
+            ESP_LOGW(TAG, "TMC2209 axis %d IHOLD_IRUN mismatch! Expected IRUN=12 IHOLD=3, got IRUN=%d IHOLD=%d",
+                     axis, irun_verify, ihold_verify);
+        }
+    } else {
+        ESP_LOGW(TAG, "TMC2209 axis %d could not read back IHOLD_IRUN for verification", axis);
+    }
 
     // Set TCOOLTHRS (minimum velocity for stallGuard)
     ESP_LOGI(TAG, "TMC2209 axis %d writing TCOOLTHRS: %d", axis, TMC2209_DEFAULT_TCOOLTHRS);

@@ -12,6 +12,11 @@
 #include <string.h>
 #include <math.h>
 
+// Import microstepping scale from board.h
+#ifndef MICROSTEP_SCALE
+#define MICROSTEP_SCALE 1.0f  // Default to no scaling if not defined
+#endif
+
 #if ZOOM_USE_SENSORLESS_HOMING && !defined(TMC2209_DEFAULT_SGTHRS)
 #error "ZOOM_USE_SENSORLESS_HOMING requires tmc2209.h"
 #endif
@@ -221,7 +226,8 @@ bool homing_update(float dt, float current_position, bool endstop_state) {
             }
             #endif
         
-            if (movement >= MIN_MOVEMENT_FOR_STALL) {
+            // Scale minimum movement threshold by microstepping factor
+            if (movement >= (MIN_MOVEMENT_FOR_STALL * MICROSTEP_SCALE)) {
                 // Motor has moved enough - check for stall
                 #if ZOOM_USE_SENSORLESS_HOMING
                 // Note: If SG_RESULT is always 0, there's a configuration problem
@@ -293,7 +299,8 @@ bool homing_update(float dt, float current_position, bool endstop_state) {
             if (triggered) {
                 // Endstop/stall detected - start backoff
                 float movement = fabsf(current_position - homing_status.stall_check_start_pos);
-                homing_status.backoff_target = current_position + HOMING_BACKOFF_STEPS;
+                // Scale backoff distance by microstepping factor
+                homing_status.backoff_target = current_position + (HOMING_BACKOFF_STEPS * MICROSTEP_SCALE);
                 homing_status.state = HOMING_BACKOFF;
                 homing_status.endstop_triggered = false;
                 homing_status.stall_readings = 0;  // Reset stall counter
@@ -417,11 +424,12 @@ float homing_get_target_velocity(void) {
     
     // Velocity is negative (toward endstop/minimum)
     if (homing_status.state == HOMING_FAST_APPROACH) {
-        return -HOMING_FAST_SPEED;
+        // Scale homing speeds by microstepping factor
+        return -HOMING_FAST_SPEED * MICROSTEP_SCALE;
     } else if (homing_status.state == HOMING_BACKOFF) {
-        return HOMING_FAST_SPEED;  // Positive - away from endstop
+        return HOMING_FAST_SPEED * MICROSTEP_SCALE;  // Positive - away from endstop
     } else if (homing_status.state == HOMING_SLOW_APPROACH) {
-        return -HOMING_SLOW_SPEED;
+        return -HOMING_SLOW_SPEED * MICROSTEP_SCALE;
     }
     
     return 0.0f;

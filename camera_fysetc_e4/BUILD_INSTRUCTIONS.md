@@ -40,7 +40,7 @@ You should see output showing the ESP-IDF version.
 ### Step 1: Navigate to Project Directory
 
 ```bash
-cd camera_fysetc_e4_
+cd camera_fysetc_e4
 ```
 
 ### Step 2: Set ESP-IDF Environment (if not already set)

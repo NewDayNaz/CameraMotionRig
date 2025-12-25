@@ -9,6 +9,11 @@
 #include <string.h>
 #include <math.h>
 
+// Import microstepping scale from board.h
+#ifndef MICROSTEP_SCALE
+#define MICROSTEP_SCALE 1.0f  // Default to no scaling if not defined
+#endif
+
 // Slew rate limit (steps/sec^2) - 1/3 to 1/2 of max acceleration
 #define SLEW_RATE_LIMIT_PAN  (MAX_ACCEL_PAN / 2.0f)
 #define SLEW_RATE_LIMIT_TILT (MAX_ACCEL_TILT / 2.0f)
@@ -24,15 +29,16 @@ void motion_planner_init(motion_planner_t* planner, segment_queue_t* queue) {
     memset(planner, 0, sizeof(motion_planner_t));
     planner->queue = queue;
     
-    // Initialize max speeds
-    planner->max_velocity[AXIS_PAN] = MAX_VELOCITY_PAN;
-    planner->max_velocity[AXIS_TILT] = MAX_VELOCITY_TILT;
-    planner->max_velocity[AXIS_ZOOM] = MAX_VELOCITY_ZOOM;
+    // Initialize max speeds (scale by microstepping factor)
+    // Velocities are specified in "full steps/sec" but need to be converted to "microsteps/sec"
+    planner->max_velocity[AXIS_PAN] = MAX_VELOCITY_PAN * MICROSTEP_SCALE;
+    planner->max_velocity[AXIS_TILT] = MAX_VELOCITY_TILT * MICROSTEP_SCALE;
+    planner->max_velocity[AXIS_ZOOM] = MAX_VELOCITY_ZOOM * MICROSTEP_SCALE;
     
-    // Initialize max accelerations
-    planner->max_accel[AXIS_PAN] = MAX_ACCEL_PAN;
-    planner->max_accel[AXIS_TILT] = MAX_ACCEL_TILT;
-    planner->max_accel[AXIS_ZOOM] = MAX_ACCEL_ZOOM;
+    // Initialize max accelerations (scale by microstepping factor)
+    planner->max_accel[AXIS_PAN] = MAX_ACCEL_PAN * MICROSTEP_SCALE;
+    planner->max_accel[AXIS_TILT] = MAX_ACCEL_TILT * MICROSTEP_SCALE;
+    planner->max_accel[AXIS_ZOOM] = MAX_ACCEL_ZOOM * MICROSTEP_SCALE;
     
     // Initialize limits (default to very large range)
     for (int i = 0; i < NUM_AXES; i++) {
@@ -140,8 +146,10 @@ bool motion_planner_plan_move(motion_planner_t* planner, const float targets[NUM
 }
 
 void motion_planner_set_velocities(motion_planner_t* planner, const float velocities[NUM_AXES]) {
+    // Scale velocities by microstepping factor
+    // Input velocities are in "full steps/sec", convert to "microsteps/sec"
     for (int i = 0; i < NUM_AXES; i++) {
-        planner->velocities[i] = velocities[i];
+        planner->velocities[i] = velocities[i] * MICROSTEP_SCALE;
     }
 }
 

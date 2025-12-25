@@ -43,9 +43,9 @@
 
 // Endstops (MIN) - Active LOW (require external pullups on GPIO34/35)
 // Each axis uses its own endstop pin
-#define PIN_X_MIN    GPIO_NUM_15  // PAN min endstop (X axis limit_neg)
+#define PIN_X_MIN    GPIO_NUM_34  // PAN min endstop (X axis limit_neg)
 #define PIN_Y_MIN    GPIO_NUM_35  // TILT min endstop (Y axis limit_neg)
-#define PIN_Z_MIN    GPIO_NUM_34  // ZOOM min endstop (Z axis limit_neg)
+#define PIN_Z_MIN    GPIO_NUM_15  // ZOOM min endstop (Z axis limit_neg)
 
 // Motor UART (TMC2209 configuration)
 #define PIN_UART1_TX GPIO_NUM_22
@@ -59,6 +59,13 @@
 #define TMC2209_ADDR_PAN   1  // X axis driver address
 #define TMC2209_ADDR_TILT  3  // Y axis driver address
 #define TMC2209_ADDR_ZOOM  0  // Z axis driver address
+
+// Microstepping configuration
+// TMC2209 microstepping is set via hardware pins (MS1, MS2) on the driver board
+// This scale factor converts from "full steps/sec" to "microsteps/sec"
+// Common values: 1 (full step), 2 (half), 4 (quarter), 8 (eighth), 16 (sixteenth), 32 (thirty-second)
+// If your board is configured for 16x microstepping, set this to 16
+#define MICROSTEP_SCALE  16.0f  // Adjust this to match your hardware microstepping configuration
 
 // Axis to Pin Mapping Arrays
 extern const gpio_num_t step_pins[NUM_AXES];

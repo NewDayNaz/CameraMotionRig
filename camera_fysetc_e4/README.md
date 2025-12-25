@@ -49,7 +49,7 @@ See [BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md) for detailed instructions.
 
 1. Install ESP-IDF v5.0 or later
 2. Set ESP-IDF environment (run `export.bat` on Windows or `export.sh` on Linux/macOS)
-3. Navigate to project directory: `cd camera_fysetc_e4_`
+3. Navigate to project directory: `cd camera_fysetc_e4`
 4. Build: `idf.py build`
 5. Flash: `idf.py -p COM3 flash monitor` (replace COM3 with your port)
 
@@ -64,11 +64,27 @@ chmod +x build_and_flash.sh
 ./build_and_flash.sh /dev/ttyUSB0
 ```
 
+## Microstepping Configuration
+
+The firmware automatically scales velocities and accelerations based on the microstepping configuration set in `board.h` via `MICROSTEP_SCALE`. 
+
+**Important**: Velocities are specified in "full steps/sec" (not microsteps). The firmware automatically converts these to microsteps/sec based on your hardware configuration.
+
+To configure microstepping, edit `board.h` and set `MICROSTEP_SCALE` to match your TMC2209 hardware configuration:
+- `1.0f` = Full step (no microstepping)
+- `2.0f` = Half step
+- `4.0f` = Quarter step
+- `8.0f` = Eighth step
+- `16.0f` = Sixteenth step (default)
+- `32.0f` = Thirty-second step
+
+The microstepping is set via hardware pins (MS1, MS2) on the TMC2209 driver board. Check your board's documentation to determine the current microstepping setting.
+
 ## USB Serial Commands
 
 Commands sent from Raspberry Pi over USB serial (115200 baud):
 
-- `VEL <pan> <tilt> <zoom>` - Set velocities (steps/sec) for manual mode
+- `VEL <pan> <tilt> <zoom>` - Set velocities (full steps/sec) for manual mode
 - `GOTO <n>` - Move to preset n using quintic interpolation
 - `SAVE <n>` - Save current position as preset n
 - `HOME` - Start sequential homing sequence for all axes (PAN, TILT, ZOOM)
