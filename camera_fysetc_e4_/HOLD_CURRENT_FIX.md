@@ -64,3 +64,4 @@ If motor still gets hot even with IHOLD=3:
 
 The TMC2209 has automatic current reduction features (stealthChop bit 10 is enabled), which also helps reduce power consumption during operation. The primary solution is keeping IHOLD as low as possible while still maintaining position.
 
+

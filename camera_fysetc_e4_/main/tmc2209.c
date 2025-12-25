@@ -15,6 +15,9 @@
 #include <string.h>
 #include <stdint.h>
 
+// Forward declaration
+extern uint8_t board_get_tmc2209_address(uint8_t axis);
+
 static const char* TAG = "tmc2209";
 
 static uart_port_t tmc2209_uart = TMC2209_UART_NUM;
@@ -88,8 +91,13 @@ bool tmc2209_write_register(uint8_t axis, uint8_t address, uint32_t data) {
         return false;
     }
 
+    // Get TMC2209 driver address for this axis
+    extern uint8_t board_get_tmc2209_address(uint8_t axis);
+    uint8_t driver_addr = board_get_tmc2209_address(axis);
+    
     // TMC2209 UART write packet: 8 bytes
-    // Byte 0: Sync + Address (0x80 | (address & 0x7F))
+    // Byte 0: Sync + Register Address (0x80 | (register_addr & 0x7F))
+    // Note: Driver address is set via hardware (PDN_UART pin), not in packet
     // Byte 1: Register address
     // Bytes 2-5: 32-bit data (MSB first)
     // Bytes 6-7: CRC (calculated over bytes 0-5)
@@ -113,8 +121,8 @@ bool tmc2209_write_register(uint8_t axis, uint8_t address, uint32_t data) {
     // Log write packet for debugging (first few writes only)
     static int write_count = 0;
     if (write_count++ < 10) {
-        ESP_LOGI(TAG, "TMC2209 write (addr=0x%02X, reg=0x%02X): %02X %02X %02X %02X %02X %02X %02X %02X",
-                address, address, packet[0], packet[1], packet[2], packet[3],
+        ESP_LOGI(TAG, "TMC2209 write (axis=%d, driver_addr=%d, reg=0x%02X): %02X %02X %02X %02X %02X %02X %02X %02X",
+                axis, driver_addr, address, packet[0], packet[1], packet[2], packet[3],
                 packet[4], packet[5], packet[6], packet[7]);
     }
 
@@ -139,6 +147,11 @@ bool tmc2209_read_register(uint8_t axis, uint8_t address, uint32_t* data) {
         ESP_LOGE(TAG, "Invalid parameters");
         return false;
     }
+
+    // Get TMC2209 driver address for this axis
+    // Note: TMC2209 driver addresses are set via hardware (PDN_UART pin configuration)
+    // The address is not encoded in the UART packet - it's used for reference/logging only
+    uint8_t driver_addr = board_get_tmc2209_address(axis);
 
     // First, send a write command to request the register
     // TMC2209 read: send write command with register address, then read response
@@ -188,8 +201,8 @@ bool tmc2209_read_register(uint8_t axis, uint8_t address, uint32_t* data) {
     // Log raw response for debugging (first few reads only)
     static int read_count = 0;
     if (read_count++ < 5) {
-        ESP_LOGI(TAG, "TMC2209 read response (addr=0x%02X): %02X %02X %02X %02X %02X %02X %02X %02X",
-                address, response[0], response[1], response[2], response[3],
+        ESP_LOGI(TAG, "TMC2209 read response (axis=%d, driver_addr=%d, reg=0x%02X): %02X %02X %02X %02X %02X %02X %02X %02X",
+                axis, driver_addr, address, response[0], response[1], response[2], response[3],
                 response[4], response[5], response[6], response[7]);
     }
 

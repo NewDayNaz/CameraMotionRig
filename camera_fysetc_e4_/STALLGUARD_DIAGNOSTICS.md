@@ -94,3 +94,4 @@ After flashing, look for these log messages on startup:
 4. Report what SG_RESULT values you see
 5. Based on results, we can adjust configuration or fix communication issues
 
+

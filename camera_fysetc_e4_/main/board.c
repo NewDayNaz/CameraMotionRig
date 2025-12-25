@@ -11,25 +11,34 @@
 static const char* TAG = "board";
 
 // Axis to Pin Mapping Arrays
+// Each axis uses its own motor pins (X, Y, Z)
 const gpio_num_t step_pins[NUM_AXES] = {
     PIN_X_STEP,   // PAN (X-axis)
     PIN_Y_STEP,   // TILT (Y-axis)
-    PIN_E0_STEP   // ZOOM (E0-axis)
+    PIN_Z_STEP    // ZOOM (Z-axis)
 };
 
 const gpio_num_t dir_pins[NUM_AXES] = {
     PIN_X_DIR,    // PAN
     PIN_Y_DIR,    // TILT
-    PIN_E0_DIR    // ZOOM
+    PIN_Z_DIR     // ZOOM
 };
 
 // Endstop pin mapping (GPIO_NUM_NC indicates no endstop)
-// NOTE: GPIO15 (PIN_Z_MIN) is a strap pin - use external pullup resistor
-// Alternatively, set to GPIO_NUM_NC to use sensorless homing for zoom
+// Each axis uses its own endstop pin
+// NOTE: GPIO15 is a strap pin - use external pullup resistor (10kΩ to 3.3V)
+// NOTE: GPIO34/35 are input-only - require external pullups (10kΩ to 3.3V)
 const gpio_num_t endstop_pins[NUM_AXES] = {
-    PIN_X_MIN,    // PAN endstop
-    PIN_Y_MIN,    // TILT endstop
-    PIN_Z_MIN     // ZOOM endstop (GPIO15 - requires external pullup)
+    PIN_X_MIN,    // PAN endstop (GPIO15 - requires external pullup for boot)
+    PIN_Y_MIN,    // TILT endstop (GPIO35 - input-only, requires external pullup)
+    PIN_Z_MIN     // ZOOM endstop (GPIO34 - input-only, requires external pullup)
+};
+
+// TMC2209 driver UART addresses (based on FluidNC config)
+const uint8_t tmc2209_addresses[NUM_AXES] = {
+    TMC2209_ADDR_PAN,   // PAN (X axis): addr=1
+    TMC2209_ADDR_TILT,  // TILT (Y axis): addr=3
+    TMC2209_ADDR_ZOOM   // ZOOM (Z axis): addr=0
 };
 
 // Axis Names
@@ -96,8 +105,18 @@ void board_init(void) {
     }
 }
 
+uint8_t board_get_tmc2209_address(uint8_t axis) {
+    if (axis >= NUM_AXES) {
+        return 0;
+    }
+    return tmc2209_addresses[axis];
+}
+
 void board_set_enable(bool enable) {
     // TMC2209 enable is active LOW, so invert the logic
+    // FluidNC config shows shared_stepper_disable_pin: gpio.25:high
+    // "high" means active HIGH, so LOW = disabled, HIGH = enabled
+    // But TMC2209 EN pin is active LOW, so we need to invert
     gpio_set_level(PIN_X_EN, enable ? 0 : 1);
 }
 

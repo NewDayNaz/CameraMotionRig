@@ -84,3 +84,4 @@ After fixes, you should see:
 
 If all registers still read 0, UART communication is fundamentally broken and needs hardware/configuration fixes.
 
+

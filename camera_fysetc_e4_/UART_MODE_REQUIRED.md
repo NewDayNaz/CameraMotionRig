@@ -71,3 +71,4 @@ Once you configure the FYSETC E4 board for UART mode:
 
 The system will function normally, but zoom axis won't be homed automatically. You can manually position it or add a physical endstop if needed.
 
+
