@@ -148,12 +148,12 @@ void preset_init_default(preset_t* preset) {
     for (int i = 0; i < NUM_AXES; i++) {
         preset->pos[i] = 0.0f;
     }
-    preset->easing_type = EASING_SMOOTHERSTEP;
+    preset->easing_type = EASING_LINEAR;
     preset->duration_s = 6.0f;  // 6 second default
     preset->max_speed_scale = 1.0f;  // Use duration
     preset->arrival_overshoot = 0.0f;
     preset->approach_mode = APPROACH_DIRECT;
-    preset->speed_multiplier = 1.0f;
+    preset->speed_multiplier = 0.5f;
     preset->accel_multiplier = 1.0f;
     preset->precision_preferred = false;
     preset->valid = true;
