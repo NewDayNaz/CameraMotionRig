@@ -65,7 +65,7 @@
 // This scale factor converts from "full steps/sec" to "microsteps/sec"
 // Common values: 1 (full step), 2 (half), 4 (quarter), 8 (eighth), 16 (sixteenth), 32 (thirty-second)
 // If your board is configured for 16x microstepping, set this to 16
-#define MICROSTEP_SCALE  16.0f  // Adjust this to match your hardware microstepping configuration
+#define MICROSTEP_SCALE  8.0f  // Adjust this to match your hardware microstepping configuration
 
 // Axis to Pin Mapping Arrays
 extern const gpio_num_t step_pins[NUM_AXES];

@@ -255,6 +255,28 @@ bool motion_controller_save_preset(uint8_t preset_index) {
     return true;
 }
 
+bool motion_controller_get_preset(uint8_t preset_index, preset_t* preset) {
+    if (!controller_initialized || preset == NULL) {
+        return false;
+    }
+    
+    return preset_load(preset_index, preset);
+}
+
+bool motion_controller_update_preset(uint8_t preset_index, const preset_t* preset) {
+    if (!controller_initialized || preset == NULL) {
+        return false;
+    }
+    
+    if (!preset_save(preset_index, preset)) {
+        ESP_LOGE(TAG, "Failed to update preset %d", preset_index);
+        return false;
+    }
+    
+    ESP_LOGI(TAG, "Updated preset %d", preset_index);
+    return true;
+}
+
 void motion_controller_set_velocities(const float velocities[3]) {
     if (!controller_initialized) {
         return;

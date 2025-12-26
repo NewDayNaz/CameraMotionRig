@@ -38,6 +38,22 @@ bool motion_controller_goto_preset(uint8_t preset_index);
 bool motion_controller_save_preset(uint8_t preset_index);
 
 /**
+ * @brief Get preset data
+ * @param preset_index Preset index
+ * @param preset Output preset structure
+ * @return true if preset was loaded successfully
+ */
+bool motion_controller_get_preset(uint8_t preset_index, preset_t* preset);
+
+/**
+ * @brief Update preset with new data
+ * @param preset_index Preset index
+ * @param preset Preset structure with new data
+ * @return true if updated successfully
+ */
+bool motion_controller_update_preset(uint8_t preset_index, const preset_t* preset);
+
+/**
  * @brief Handle command to set velocities (manual mode)
  * @param velocities Velocities for each axis
  */
