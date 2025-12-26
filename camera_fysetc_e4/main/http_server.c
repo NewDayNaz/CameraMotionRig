@@ -408,12 +408,99 @@ static const char html_page[] =
 "function createPresetButtons() {"
 "  const grid = document.getElementById('preset_grid');"
 "  grid.innerHTML = '';"
-"  for (let i = 0; i < 10; i++) {"
+"  for (let i = 0; i < 16; i++) {"
 "    const btn = document.createElement('button');"
 "    btn.className = 'btn-secondary preset-btn';"
 "    btn.textContent = 'Preset ' + i;"
 "    btn.onclick = () => gotoPreset(i);"
+"    const editBtn = document.createElement('button');"
+"    editBtn.className = 'preset-edit-btn';"
+"    editBtn.textContent = 'Edit';"
+"    editBtn.onclick = (e) => { e.stopPropagation(); openPresetEditor(i); };"
+"    btn.appendChild(editBtn);"
 "    grid.appendChild(btn);"
+"  }"
+"}"
+"let currentEditingPreset = -1;"
+"function openPresetEditor(idx) {"
+"  currentEditingPreset = idx;"
+"  document.getElementById('editor_preset_idx').textContent = idx;"
+"  document.getElementById('preset_editor_modal').style.display = 'block';"
+"  fetch('/api/preset/get?index=' + idx).then(r => r.json()).then(data => {"
+"    if (data.status === 'ok' && data.preset) {"
+"      const p = data.preset;"
+"      document.getElementById('editor_pos_pan').value = p.pos[0] || 0;"
+"      document.getElementById('editor_pos_tilt').value = p.pos[1] || 0;"
+"      document.getElementById('editor_pos_zoom').value = p.pos[2] || 0;"
+"      document.getElementById('editor_duration').value = p.duration_s || 0;"
+"      document.getElementById('editor_speed_scale').value = p.max_speed_scale || 0;"
+"      document.getElementById('editor_speed_mult').value = p.speed_multiplier || 1.0;"
+"      document.getElementById('editor_accel_mult').value = p.accel_multiplier || 1.0;"
+"      document.getElementById('editor_easing').value = p.easing_type || 0;"
+"      document.getElementById('editor_approach').value = p.approach_mode || 0;"
+"      document.getElementById('editor_overshoot').value = p.arrival_overshoot || 0;"
+"      document.getElementById('editor_precision').checked = p.precision_preferred || false;"
+"    } else {"
+"      document.getElementById('editor_pos_pan').value = 0;"
+"      document.getElementById('editor_pos_tilt').value = 0;"
+"      document.getElementById('editor_pos_zoom').value = 0;"
+"      document.getElementById('editor_duration').value = 0;"
+"      document.getElementById('editor_speed_scale').value = 0;"
+"      document.getElementById('editor_speed_mult').value = 1.0;"
+"      document.getElementById('editor_accel_mult').value = 1.0;"
+"      document.getElementById('editor_easing').value = 1;"
+"      document.getElementById('editor_approach').value = 0;"
+"      document.getElementById('editor_overshoot').value = 0;"
+"      document.getElementById('editor_precision').checked = false;"
+"    }"
+"  }).catch(e => {"
+"    console.error('Failed to load preset:', e);"
+"    alert('Failed to load preset data');"
+"  });"
+"}"
+"function closePresetEditor() {"
+"  document.getElementById('preset_editor_modal').style.display = 'none';"
+"  currentEditingPreset = -1;"
+"}"
+"function savePresetEditor() {"
+"  if (currentEditingPreset < 0) return;"
+"  const preset = {"
+"    index: currentEditingPreset,"
+"    pos: ["
+"      parseFloat(document.getElementById('editor_pos_pan').value) || 0,"
+"      parseFloat(document.getElementById('editor_pos_tilt').value) || 0,"
+"      parseFloat(document.getElementById('editor_pos_zoom').value) || 0"
+"    ],"
+"    duration_s: parseFloat(document.getElementById('editor_duration').value) || 0,"
+"    max_speed_scale: parseFloat(document.getElementById('editor_speed_scale').value) || 0,"
+"    speed_multiplier: parseFloat(document.getElementById('editor_speed_mult').value) || 1.0,"
+"    accel_multiplier: parseFloat(document.getElementById('editor_accel_mult').value) || 1.0,"
+"    easing_type: parseInt(document.getElementById('editor_easing').value) || 0,"
+"    approach_mode: parseInt(document.getElementById('editor_approach').value) || 0,"
+"    arrival_overshoot: parseFloat(document.getElementById('editor_overshoot').value) || 0,"
+"    precision_preferred: document.getElementById('editor_precision').checked,"
+"    valid: true"
+"  };"
+"  fetch('/api/preset/update', {"
+"    method: 'POST',"
+"    headers: { 'Content-Type': 'application/json' },"
+"    body: JSON.stringify(preset)"
+"  }).then(r => r.json()).then(data => {"
+"    if (data.status === 'ok') {"
+"      alert('Preset ' + currentEditingPreset + ' updated!');"
+"      closePresetEditor();"
+"    } else {"
+"      alert('Error: ' + (data.error || 'Failed to update preset'));"
+"    }"
+"  }).catch(e => {"
+"    console.error('Update preset failed:', e);"
+"    alert('Failed to update preset');"
+"  });"
+"}"
+"window.onclick = function(event) {"
+"  const modal = document.getElementById('preset_editor_modal');"
+"  if (event.target == modal) {"
+"    closePresetEditor();"
 "  }"
 "}"
 "updatePositions();"
@@ -634,6 +721,161 @@ static esp_err_t api_preset_save_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// Handler for /api/preset/get - GET preset data
+static esp_err_t api_preset_get_handler(httpd_req_t *req) {
+    char query[64];
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing query parameter");
+        return ESP_FAIL;
+    }
+    
+    char index_str[8];
+    if (httpd_query_key_value(query, "index", index_str, sizeof(index_str)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing index parameter");
+        return ESP_FAIL;
+    }
+    
+    uint8_t preset_idx = (uint8_t)atoi(index_str);
+    preset_t preset;
+    bool success = motion_controller_get_preset(preset_idx, &preset);
+    
+    cJSON *response = cJSON_CreateObject();
+    if (success && preset.valid) {
+        cJSON_AddStringToObject(response, "status", "ok");
+        cJSON *preset_json = cJSON_CreateObject();
+        
+        // Add position array
+        cJSON *pos_array = cJSON_CreateArray();
+        for (int i = 0; i < 3; i++) {
+            cJSON_AddItemToArray(pos_array, cJSON_CreateNumber(preset.pos[i]));
+        }
+        cJSON_AddItemToObject(preset_json, "pos", pos_array);
+        
+        cJSON_AddNumberToObject(preset_json, "duration_s", preset.duration_s);
+        cJSON_AddNumberToObject(preset_json, "max_speed_scale", preset.max_speed_scale);
+        cJSON_AddNumberToObject(preset_json, "speed_multiplier", preset.speed_multiplier);
+        cJSON_AddNumberToObject(preset_json, "accel_multiplier", preset.accel_multiplier);
+        cJSON_AddNumberToObject(preset_json, "easing_type", preset.easing_type);
+        cJSON_AddNumberToObject(preset_json, "approach_mode", preset.approach_mode);
+        cJSON_AddNumberToObject(preset_json, "arrival_overshoot", preset.arrival_overshoot);
+        cJSON_AddBoolToObject(preset_json, "precision_preferred", preset.precision_preferred);
+        cJSON_AddBoolToObject(preset_json, "valid", preset.valid);
+        
+        cJSON_AddItemToObject(response, "preset", preset_json);
+    } else {
+        cJSON_AddStringToObject(response, "status", "not_found");
+    }
+    
+    char *response_str = cJSON_Print(response);
+    if (response_str == NULL) {
+        cJSON_Delete(response);
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t ret = httpd_resp_send(req, response_str, strlen(response_str));
+    free(response_str);
+    cJSON_Delete(response);
+    
+    // Ignore connection reset errors (client disconnected)
+    if (ret == ESP_ERR_HTTPD_RESP_SEND) {
+        return ESP_OK;
+    }
+    
+    return ret;
+}
+
+// Handler for /api/preset/update - POST update preset
+static esp_err_t api_preset_update_handler(httpd_req_t *req) {
+    char content[512];
+    int ret = httpd_req_recv(req, content, sizeof(content) - 1);
+    if (ret <= 0) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    content[ret] = '\0';
+    
+    cJSON *json = cJSON_Parse(content);
+    if (json == NULL) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+    
+    cJSON *idx = cJSON_GetObjectItem(json, "index");
+    if (idx == NULL || !cJSON_IsNumber(idx)) {
+        cJSON_Delete(json);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing or invalid index field");
+        return ESP_FAIL;
+    }
+    
+    uint8_t preset_idx = (uint8_t)idx->valueint;
+    preset_t preset;
+    preset_init_default(&preset);
+    
+    // Parse position array
+    cJSON *pos_array = cJSON_GetObjectItem(json, "pos");
+    if (pos_array != NULL && cJSON_IsArray(pos_array)) {
+        int array_size = cJSON_GetArraySize(pos_array);
+        for (int i = 0; i < array_size && i < 3; i++) {
+            cJSON *item = cJSON_GetArrayItem(pos_array, i);
+            if (cJSON_IsNumber(item)) {
+                preset.pos[i] = (float)item->valuedouble;
+            }
+        }
+    }
+    
+    // Parse other fields
+    cJSON *item;
+    if ((item = cJSON_GetObjectItem(json, "duration_s")) != NULL && cJSON_IsNumber(item)) {
+        preset.duration_s = (float)item->valuedouble;
+    }
+    if ((item = cJSON_GetObjectItem(json, "max_speed_scale")) != NULL && cJSON_IsNumber(item)) {
+        preset.max_speed_scale = (float)item->valuedouble;
+    }
+    if ((item = cJSON_GetObjectItem(json, "speed_multiplier")) != NULL && cJSON_IsNumber(item)) {
+        preset.speed_multiplier = (float)item->valuedouble;
+    }
+    if ((item = cJSON_GetObjectItem(json, "accel_multiplier")) != NULL && cJSON_IsNumber(item)) {
+        preset.accel_multiplier = (float)item->valuedouble;
+    }
+    if ((item = cJSON_GetObjectItem(json, "easing_type")) != NULL && cJSON_IsNumber(item)) {
+        preset.easing_type = (easing_type_t)item->valueint;
+    }
+    if ((item = cJSON_GetObjectItem(json, "approach_mode")) != NULL && cJSON_IsNumber(item)) {
+        preset.approach_mode = (approach_mode_t)item->valueint;
+    }
+    if ((item = cJSON_GetObjectItem(json, "arrival_overshoot")) != NULL && cJSON_IsNumber(item)) {
+        preset.arrival_overshoot = (float)item->valuedouble;
+    }
+    if ((item = cJSON_GetObjectItem(json, "precision_preferred")) != NULL && cJSON_IsBool(item)) {
+        preset.precision_preferred = cJSON_IsTrue(item);
+    }
+    if ((item = cJSON_GetObjectItem(json, "valid")) != NULL && cJSON_IsBool(item)) {
+        preset.valid = cJSON_IsTrue(item);
+    }
+    
+    cJSON_Delete(json);
+    
+    bool success = motion_controller_update_preset(preset_idx, &preset);
+    
+    cJSON *response = cJSON_CreateObject();
+    if (success) {
+        cJSON_AddStringToObject(response, "status", "ok");
+    } else {
+        cJSON_AddStringToObject(response, "status", "error");
+        cJSON_AddStringToObject(response, "error", "Failed to update preset");
+    }
+    
+    char *response_str = cJSON_Print(response);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, response_str, strlen(response_str));
+    free(response_str);
+    cJSON_Delete(response);
+    
+    return ESP_OK;
+}
+
 bool http_server_start(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_uri_handlers = 10;
@@ -683,6 +925,20 @@ bool http_server_start(void) {
             .handler = api_preset_save_handler,
         };
         httpd_register_uri_handler(server_handle, &preset_save_uri);
+        
+        httpd_uri_t preset_get_uri = {
+            .uri = "/api/preset/get",
+            .method = HTTP_GET,
+            .handler = api_preset_get_handler,
+        };
+        httpd_register_uri_handler(server_handle, &preset_get_uri);
+        
+        httpd_uri_t preset_update_uri = {
+            .uri = "/api/preset/update",
+            .method = HTTP_POST,
+            .handler = api_preset_update_handler,
+        };
+        httpd_register_uri_handler(server_handle, &preset_update_uri);
         
         ESP_LOGI(TAG, "HTTP server started");
         return true;
