@@ -16,6 +16,15 @@
 #include "soc/soc.h"
 #include <string.h>
 
+// ESP32 GPIO32-39 use GPIO_OUT1 registers
+// If not defined, define them based on ESP32 register layout
+#ifndef GPIO_OUT1_W1TS_REG
+#define GPIO_OUT1_W1TS_REG (DR_REG_GPIO_BASE + 0x0014)  // GPIO_OUT1_W1TS
+#endif
+#ifndef GPIO_OUT1_W1TC_REG
+#define GPIO_OUT1_W1TC_REG (DR_REG_GPIO_BASE + 0x0018)  // GPIO_OUT1_W1TC
+#endif
+
 static const char* TAG = "stepper_executor";
 
 // ISR frequency: 40kHz = 25us period
@@ -108,16 +117,36 @@ static bool IRAM_ATTR timer_isr_callback(gptimer_handle_t timer, const gptimer_a
                     // Only set direction when starting a new step (when pulse state is false)
                     if (!executor_state.step_pulse_state[axis]) {
                         gpio_num_t dir_pin = dir_pins[axis];
+                        // GPIO32-39 use different registers (GPIO_OUT1) on ESP32
+                        if (dir_pin >= 32) {
+                            if (executor_state.step_direction[axis] > 0) {
+                                REG_WRITE(GPIO_OUT1_W1TS_REG, (1ULL << (dir_pin - 32)));
+                            } else {
+                                REG_WRITE(GPIO_OUT1_W1TC_REG, (1ULL << (dir_pin - 32)));
+                            }
+                        } else {
                         if (executor_state.step_direction[axis] > 0) {
                             REG_WRITE(GPIO_OUT_W1TS_REG, (1ULL << dir_pin));
                         } else {
                             REG_WRITE(GPIO_OUT_W1TC_REG, (1ULL << dir_pin));
+                            }
                         }
                     }
                     
                     // Generate step pulse (toggle) using direct register access (IRAM-safe)
                     executor_state.step_pulse_state[axis] = !executor_state.step_pulse_state[axis];
                     gpio_num_t step_pin = step_pins[axis];
+                    // GPIO32-39 use different registers (GPIO_OUT1) on ESP32
+                    if (step_pin >= 32) {
+                        if (executor_state.step_pulse_state[axis]) {
+                            REG_WRITE(GPIO_OUT1_W1TS_REG, (1ULL << (step_pin - 32)));
+                        } else {
+                            REG_WRITE(GPIO_OUT1_W1TC_REG, (1ULL << (step_pin - 32)));
+                            // Step pulse complete - update position and decrement
+                            executor_state.positions[axis] += executor_state.step_direction[axis];
+                            executor_state.steps_remaining[axis]--;
+                        }
+                    } else {
                     if (executor_state.step_pulse_state[axis]) {
                         REG_WRITE(GPIO_OUT_W1TS_REG, (1ULL << step_pin));
                     } else {
@@ -125,6 +154,7 @@ static bool IRAM_ATTR timer_isr_callback(gptimer_handle_t timer, const gptimer_a
                         // Step pulse complete - update position and decrement
                         executor_state.positions[axis] += executor_state.step_direction[axis];
                         executor_state.steps_remaining[axis]--;
+                        }
                     }
                     
                     // Subtract segment ticks from accumulator

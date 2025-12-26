@@ -72,5 +72,13 @@ float quintic_evaluate_eased(const quintic_coeffs_t* coeffs, float t, easing_typ
  */
 float easing_apply(float u, easing_type_t easing);
 
+/**
+ * @brief Calculate velocity from quintic polynomial (derivative)
+ * @param coeffs Polynomial coefficients
+ * @param t Time (0 to T)
+ * @return Velocity at time t (steps per second)
+ */
+float quintic_velocity(const quintic_coeffs_t* coeffs, float t);
+
 #endif // QUINTIC_H
 

@@ -10,6 +10,7 @@
 #include "tmc2209.h"
 #include "esp_log.h"
 #include <string.h>
+#include <math.h>
 
 static const char* TAG = "motion_controller";
 
@@ -148,19 +149,74 @@ bool motion_controller_goto_preset(uint8_t preset_index) {
     // Apply approach mode if needed
     // For now, just do direct move
     if (preset.approach_mode == APPROACH_DIRECT) {
-        // Direct move
-        float duration = preset.duration_s;
-        if (preset.max_speed_scale > 0.0f && duration <= 0.0f) {
-            // Calculate duration from speed scale
-            // This is simplified - in production, calculate based on distance and speed
-            duration = 2.0f / preset.max_speed_scale;
+        // Get current positions
+        float current_pos[NUM_AXES];
+        for (int i = 0; i < NUM_AXES; i++) {
+            current_pos[i] = motion_planner_get_position(&planner, i);
         }
         
-        // Apply per-preset multipliers
-        // TODO: Apply speed_multiplier and accel_multiplier
+        // Calculate distance for duration calculation
+        float max_distance = 0.0f;
+        for (int i = 0; i < NUM_AXES; i++) {
+            float distance = fabsf(preset.pos[i] - current_pos[i]);
+            if (distance > max_distance) {
+                max_distance = distance;
+            }
+        }
+        
+        // Calculate duration based on preset parameters
+        float duration = preset.duration_s;
+        
+        if (duration <= 0.0f) {
+            // Auto-calculate duration
+            if (preset.max_speed_scale > 0.0f) {
+                // Use speed scale: calculate duration based on distance and speed
+                // max_speed_scale is a multiplier (1.0 = normal speed, 2.0 = half speed, etc.)
+                // Apply speed_multiplier as well
+                float effective_speed_scale = preset.max_speed_scale * preset.speed_multiplier;
+                if (effective_speed_scale <= 0.0f) {
+                    effective_speed_scale = 1.0f;  // Default to normal speed
+                }
+                
+                // Calculate duration: use average velocity based on preset limits
+                // With speed scale > 1.0, we want slower motion (longer duration)
+                // Base duration on distance and preset max velocity (scaled by microstepping)
+                float base_velocity = PRESET_MAX_VELOCITY_ZOOM * MICROSTEP_SCALE;  // Use zoom as conservative base
+                float effective_velocity = base_velocity / effective_speed_scale;
+                duration = max_distance / effective_velocity;
+                
+                // Ensure minimum duration for smooth motion
+                if (duration < 0.5f) {
+                    duration = 0.5f;
+                }
+            } else {
+                // No speed scale specified - let motion_planner calculate duration automatically
+                duration = 0.0f;  // 0.0 means auto-calculate in motion_planner
+            }
+        } else {
+            // Duration specified - apply speed_multiplier to scale it
+            // speed_multiplier > 1.0 makes it slower (longer duration)
+            // speed_multiplier < 1.0 makes it faster (shorter duration)
+            if (preset.speed_multiplier > 0.0f && preset.speed_multiplier != 1.0f) {
+                duration = duration / preset.speed_multiplier;
+            }
+        }
+        
+        // Apply per-preset multipliers by temporarily scaling preset limits
+        // Note: motion_planner uses preset limits internally, so we need to scale them
+        // For now, we'll pass multipliers as a note - in the future, we could add
+        // a function to motion_planner to apply multipliers per-move
+        // speed_multiplier: affects velocity (inverse relationship with duration)
+        // accel_multiplier: affects acceleration (could be applied in future)
         
         // Enable precision mode if preferred
         motion_planner_set_precision_mode(&planner, preset.precision_preferred);
+        
+        ESP_LOGI(TAG, "Moving to preset %d: target=(%.1f, %.1f, %.1f) from current=(%.1f, %.1f, %.1f), duration=%.2fs, speed_mult=%.2f, accel_mult=%.2f", 
+                preset_index, 
+                preset.pos[0], preset.pos[1], preset.pos[2],
+                current_pos[0], current_pos[1], current_pos[2],
+                duration, preset.speed_multiplier, preset.accel_multiplier);
         
         bool success = motion_planner_plan_move(&planner, preset.pos, duration, preset.easing_type);
         if (!success) {

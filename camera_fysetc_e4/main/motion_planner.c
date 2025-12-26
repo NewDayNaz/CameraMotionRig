@@ -6,24 +6,26 @@
 #include "motion_planner.h"
 #include "board.h"
 #include "segment.h"
+#include "esp_log.h"
 #include <string.h>
 #include <math.h>
+
+static const char* TAG = "motion_planner";
 
 // Import microstepping scale from board.h
 #ifndef MICROSTEP_SCALE
 #define MICROSTEP_SCALE 1.0f  // Default to no scaling if not defined
 #endif
 
-// Slew rate limit (steps/sec^2) - 1/3 to 1/2 of max acceleration
-#define SLEW_RATE_LIMIT_PAN  (MAX_ACCEL_PAN / 2.0f)
-#define SLEW_RATE_LIMIT_TILT (MAX_ACCEL_TILT / 2.0f)
-#define SLEW_RATE_LIMIT_ZOOM (MAX_ACCEL_ZOOM / 2.0f)
+// Slew rate limit multiplier for manual/joystick mode
+// Higher values = faster acceleration response
+// 0.5 = 50% of max acceleration (conservative, smooth)
+// 1.0 = 100% of max acceleration (aggressive, immediate response)
+#define MANUAL_MODE_ACCEL_MULTIPLIER 1.0f  // Use full acceleration for joystick/velocity commands
 
-static const float slew_rate_limits[NUM_AXES] = {
-    SLEW_RATE_LIMIT_PAN,
-    SLEW_RATE_LIMIT_TILT,
-    SLEW_RATE_LIMIT_ZOOM
-};
+// Slew rate limits for manual mode (will be scaled by microstepping and multiplier)
+// These are computed at runtime to account for microstepping scaling
+static float slew_rate_limits[NUM_AXES];
 
 void motion_planner_init(motion_planner_t* planner, segment_queue_t* queue) {
     memset(planner, 0, sizeof(motion_planner_t));
@@ -40,10 +42,18 @@ void motion_planner_init(motion_planner_t* planner, segment_queue_t* queue) {
     planner->max_accel[AXIS_TILT] = MAX_ACCEL_TILT * MICROSTEP_SCALE;
     planner->max_accel[AXIS_ZOOM] = MAX_ACCEL_ZOOM * MICROSTEP_SCALE;
     
-    // Initialize limits (default to very large range)
+    // Initialize slew rate limits (scaled by microstepping and acceleration multiplier)
+    // These control how fast velocities can change in manual/joystick mode
+    // Using full acceleration (1.0 multiplier) for responsive joystick control
+    slew_rate_limits[AXIS_PAN] = MAX_ACCEL_PAN * MICROSTEP_SCALE * MANUAL_MODE_ACCEL_MULTIPLIER;
+    slew_rate_limits[AXIS_TILT] = MAX_ACCEL_TILT * MICROSTEP_SCALE * MANUAL_MODE_ACCEL_MULTIPLIER;
+    slew_rate_limits[AXIS_ZOOM] = MAX_ACCEL_ZOOM * MICROSTEP_SCALE * MANUAL_MODE_ACCEL_MULTIPLIER;
+    
+    // Initialize limits (default to very large range, scaled by microstepping)
+    // Limits are in microsteps to match position tracking
     for (int i = 0; i < NUM_AXES; i++) {
-        planner->limits_min[i] = -100000.0f;
-        planner->limits_max[i] = 100000.0f;
+        planner->limits_min[i] = -100000.0f * MICROSTEP_SCALE;
+        planner->limits_max[i] = 100000.0f * MICROSTEP_SCALE;
     }
     
     planner->precision_multiplier = 0.25f;
@@ -66,8 +76,9 @@ float motion_planner_get_position(const motion_planner_t* planner, uint8_t axis)
 
 void motion_planner_set_limits(motion_planner_t* planner, uint8_t axis, float min, float max) {
     if (axis < NUM_AXES) {
-        planner->limits_min[axis] = min;
-        planner->limits_max[axis] = max;
+        // Assume limits are provided in full steps, convert to microsteps
+        planner->limits_min[axis] = min * MICROSTEP_SCALE;
+        planner->limits_max[axis] = max * MICROSTEP_SCALE;
     }
 }
 
@@ -112,19 +123,77 @@ bool motion_planner_plan_move(motion_planner_t* planner, const float targets[NUM
     }
     
     // Calculate required duration if not specified
+    // Use preset-specific limits (more conservative) to prevent step skipping
+    // Quintic curves can have high peak velocities/accelerations
     if (duration <= 0.0f) {
+        // Use preset-specific limits (scaled by microstepping)
+        // These are 50% of manual control limits to prevent step skipping
+        const float preset_max_vel[NUM_AXES] = {
+            PRESET_MAX_VELOCITY_PAN * MICROSTEP_SCALE,
+            PRESET_MAX_VELOCITY_TILT * MICROSTEP_SCALE,
+            PRESET_MAX_VELOCITY_ZOOM * MICROSTEP_SCALE
+        };
+        const float preset_max_accel[NUM_AXES] = {
+            PRESET_MAX_ACCEL_PAN * MICROSTEP_SCALE,
+            PRESET_MAX_ACCEL_TILT * MICROSTEP_SCALE,
+            PRESET_MAX_ACCEL_ZOOM * MICROSTEP_SCALE
+        };
+        
         float max_duration = 0.0f;
         for (int i = 0; i < NUM_AXES; i++) {
             float distance = fabsf(targets[i] - planner->positions[i]);
             if (distance > 0.0f) {
-                float axis_duration = distance / planner->max_velocity[i];
+                // PRIORITIZE ACCELERATION CONSTRAINTS FIRST
+                // Quintic curves have peak accelerations ~2-3x average acceleration
+                // Use only 15% of preset max acceleration to account for peaks (very conservative)
+                // This ensures we don't exceed acceleration limits and skip steps
+                float accel_limit_used = preset_max_accel[i] * 0.15f;
+                
+                // Calculate minimum duration based on acceleration constraint
+                // For a quintic curve with zero start/end velocity, the peak acceleration occurs
+                // during the acceleration phase. We need to ensure the acceleration phase
+                // doesn't exceed our limits.
+                // Using: t = sqrt(2 * distance / a) for constant acceleration
+                // But quintic curves are more complex, so we add safety factors
+                float accel_duration = sqrtf(2.0f * distance / accel_limit_used) * 2.0f;
+                
+                // Now check if this duration allows us to stay within velocity limits
+                // Average velocity = distance / duration
+                // Peak velocity for quintic is ~1.5-2x average
+                float avg_velocity = distance / accel_duration;
+                float peak_velocity_estimate = avg_velocity * 2.0f;  // Conservative estimate
+                
+                // Use only 15% of preset max velocity as our limit (very conservative)
+                float vel_limit_used = preset_max_vel[i] * 0.15f;
+                
+                // If peak velocity exceeds limit, increase duration
+                if (peak_velocity_estimate > vel_limit_used) {
+                    // Recalculate duration to satisfy velocity constraint
+                    // peak_velocity = 2 * distance / duration
+                    // duration = 2 * distance / peak_velocity
+                    float vel_duration = (2.0f * distance) / vel_limit_used;
+                    // Use the longer duration (acceleration or velocity constrained)
+                    accel_duration = (vel_duration > accel_duration) ? vel_duration : accel_duration;
+                }
+                
+                // Add safety factor for quintic curve peaks (3.0x for very smooth cinematic motion)
+                // This ensures we have plenty of time to complete the move smoothly
+                float axis_duration = accel_duration * 3.0f;
+                
+                // Add minimum duration based on distance to ensure smooth motion
+                // At least 1.5 seconds per 1000 full steps (16000 microsteps with 16x microstepping) for cinematic moves
+                float min_duration = (distance / (1000.0f * MICROSTEP_SCALE)) * 1.5f;
+                if (axis_duration < min_duration) {
+                    axis_duration = min_duration;
+                }
+                
                 if (axis_duration > max_duration) {
                     max_duration = axis_duration;
                 }
             }
         }
         duration = max_duration;
-        if (duration < 0.1f) duration = 0.1f;  // Minimum 100ms
+        if (duration < 0.5f) duration = 0.5f;  // Minimum 500ms for smooth cinematic motion
     }
     
     // Initialize quintic coefficients for each axis
@@ -268,12 +337,11 @@ void motion_planner_update(motion_planner_t* planner, float dt) {
                 float pos_start = quintic_evaluate_eased(&planner->move_coeffs[i], t_start, planner->move_easing);
                 float pos_end = quintic_evaluate_eased(&planner->move_coeffs[i], t_end, planner->move_easing);
                 
-                // Calculate steps for this segment (round to nearest)
+                // Calculate steps for this segment
+                // Use the quintic curve directly - the duration calculation ensures we don't exceed limits
                 float steps_float = pos_end - pos_start;
-                seg.steps[i] = (int32_t)roundf(steps_float);
                 
-                // Accumulate rounding error correction (simple approach)
-                // In production, use proper error accumulation
+                seg.steps[i] = (int32_t)roundf(steps_float);
             }
             
             segment_queue_push(planner->queue, &seg);

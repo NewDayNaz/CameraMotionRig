@@ -67,6 +67,23 @@ float easing_apply(float u, easing_type_t easing) {
     }
 }
 
+float quintic_velocity(const quintic_coeffs_t* coeffs, float t) {
+    // Clamp t to [0, T]
+    if (t < 0.0f) t = 0.0f;
+    if (t > coeffs->T) t = coeffs->T;
+    
+    // Velocity is the derivative: v(t) = a1 + 2*a2*t + 3*a3*t^2 + 4*a4*t^3 + 5*a5*t^4
+    // For quintic with zero start/end velocity: a1=0, a2=0
+    // So: v(t) = 3*a3*t^2 + 4*a4*t^3 + 5*a5*t^4
+    float t2 = t * t;
+    float t3 = t2 * t;
+    float t4 = t3 * t;
+    
+    return 3.0f * coeffs->a3 * t2 + 
+           4.0f * coeffs->a4 * t3 + 
+           5.0f * coeffs->a5 * t4;
+}
+
 float quintic_evaluate_eased(const quintic_coeffs_t* coeffs, float t, easing_type_t easing) {
     // Normalize time to [0, 1]
     float u = (coeffs->T > 0.0f) ? (t / coeffs->T) : 0.0f;

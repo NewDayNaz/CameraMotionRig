@@ -226,7 +226,7 @@ bool homing_update(float dt, float current_position, bool endstop_state) {
             }
             #endif
         
-            // Scale minimum movement threshold by microstepping factor
+            // Minimum movement threshold - positions are in microsteps, so scale accordingly
             if (movement >= (MIN_MOVEMENT_FOR_STALL * MICROSTEP_SCALE)) {
                 // Motor has moved enough - check for stall
                 #if ZOOM_USE_SENSORLESS_HOMING
@@ -299,7 +299,8 @@ bool homing_update(float dt, float current_position, bool endstop_state) {
             if (triggered) {
                 // Endstop/stall detected - start backoff
                 float movement = fabsf(current_position - homing_status.stall_check_start_pos);
-                // Scale backoff distance by microstepping factor
+                // Positions are in microsteps, so scale backoff distance by microstepping factor
+                // HOMING_BACKOFF_STEPS is in full steps, convert to microsteps
                 homing_status.backoff_target = current_position + (HOMING_BACKOFF_STEPS * MICROSTEP_SCALE);
                 homing_status.state = HOMING_BACKOFF;
                 homing_status.endstop_triggered = false;
@@ -320,10 +321,17 @@ bool homing_update(float dt, float current_position, bool endstop_state) {
             
         case HOMING_BACKOFF:
             // Move away from endstop until backoff distance reached
-            if (fabsf(current_position - homing_status.backoff_target) < 10.0f) {
+            // Positions are in microsteps, so tolerance should account for microstepping
+            float backoff_distance = current_position - homing_status.backoff_target;
+            float backoff_tolerance = 50.0f * MICROSTEP_SCALE;  // Tolerance scaled by microstepping
+            
+            // Check if we've reached or passed the target (moving away from endstop = positive direction)
+            if (backoff_distance >= -backoff_tolerance) {
                 // Backoff complete - start slow approach
                 homing_status.state = HOMING_SLOW_APPROACH;
-                ESP_LOGI(TAG, "Backoff complete, starting slow approach");
+                homing_status.stall_check_start_pos = 0.0f;  // Reset for slow approach
+                ESP_LOGI(TAG, "Backoff complete (pos=%.1f, target=%.1f), starting slow approach", 
+                        current_position, homing_status.backoff_target);
             }
             break;
             
@@ -423,13 +431,13 @@ float homing_get_target_velocity(void) {
     }
     
     // Velocity is negative (toward endstop/minimum)
+    // Note: Speeds are in "full steps/sec" - motion_planner_set_velocities() will scale by microstepping
     if (homing_status.state == HOMING_FAST_APPROACH) {
-        // Scale homing speeds by microstepping factor
-        return -HOMING_FAST_SPEED * MICROSTEP_SCALE;
+        return -HOMING_FAST_SPEED;
     } else if (homing_status.state == HOMING_BACKOFF) {
-        return HOMING_FAST_SPEED * MICROSTEP_SCALE;  // Positive - away from endstop
+        return HOMING_FAST_SPEED;  // Positive - away from endstop
     } else if (homing_status.state == HOMING_SLOW_APPROACH) {
-        return -HOMING_SLOW_SPEED * MICROSTEP_SCALE;
+        return -HOMING_SLOW_SPEED;
     }
     
     return 0.0f;
