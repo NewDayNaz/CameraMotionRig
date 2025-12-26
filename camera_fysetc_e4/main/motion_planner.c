@@ -176,9 +176,24 @@ bool motion_planner_plan_move(motion_planner_t* planner, const float targets[NUM
                     accel_duration = (vel_duration > accel_duration) ? vel_duration : accel_duration;
                 }
                 
-                // Add safety factor for quintic curve peaks (3.0x for very smooth cinematic motion)
-                // This ensures we have plenty of time to complete the move smoothly
-                float axis_duration = accel_duration * 3.0f;
+                // Add safety factor for quintic curve peaks
+                // Base safety factor
+                float safety_factor = 3.0f;
+                
+                // Additional multiplier for non-linear easing functions
+                // Smootherstep and sigmoid can create higher peak velocities due to their
+                // non-linear time warping, so we need longer durations
+                // Linear easing: 1.0x (no additional scaling needed)
+                // Smootherstep: ~1.5x higher peak velocities
+                // Sigmoid: ~2.0x higher peak velocities (steeper curve)
+                float easing_multiplier = 1.0f;
+                if (easing == EASING_SMOOTHERSTEP) {
+                    easing_multiplier = 1.8f;  // Smootherstep needs more time
+                } else if (easing == EASING_SIGMOID) {
+                    easing_multiplier = 2.2f;  // Sigmoid needs even more time
+                }
+                
+                float axis_duration = accel_duration * safety_factor * easing_multiplier;
                 
                 // Add minimum duration based on distance to ensure smooth motion
                 // At least 1.5 seconds per 1000 full steps (16000 microsteps with 16x microstepping) for cinematic moves

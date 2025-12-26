@@ -9,6 +9,7 @@
 #include "homing.h"
 #include "tmc2209.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include <string.h>
 #include <math.h>
 
@@ -17,6 +18,11 @@ static const char* TAG = "motion_controller";
 static segment_queue_t segment_queue;
 static motion_planner_t planner;
 static bool controller_initialized = false;
+
+// Idle detection: disable steppers after 5 minutes of inactivity
+#define IDLE_TIMEOUT_US (5 * 60 * 1000 * 1000)  // 5 minutes in microseconds
+static int64_t last_command_time[NUM_AXES];  // Last command time per axis (microseconds)
+static bool steppers_enabled = true;  // Track enable state
 
 void motion_controller_init(void) {
     if (controller_initialized) {
@@ -60,6 +66,13 @@ void motion_controller_init(void) {
     // Initialize homing
     homing_init();
     
+    // Initialize idle detection: set all axes to current time
+    int64_t now = esp_timer_get_time();
+    for (int i = 0; i < NUM_AXES; i++) {
+        last_command_time[i] = now;
+    }
+    steppers_enabled = true;
+    
     controller_initialized = true;
     ESP_LOGI(TAG, "Motion controller initialized");
 }
@@ -71,6 +84,43 @@ void motion_controller_update(float dt) {
     
     // Update motion planner
     motion_planner_update(&planner, dt);
+    
+    // Check for idle steppers: disable if no commands for 5 minutes
+    int64_t now = esp_timer_get_time();
+    bool any_axis_active = false;
+    
+    // Check if any axis has been commanded recently (within timeout)
+    for (int i = 0; i < NUM_AXES; i++) {
+        if ((now - last_command_time[i]) < IDLE_TIMEOUT_US) {
+            any_axis_active = true;
+            break;
+        }
+    }
+    
+    // Also check if homing is active or if there's an active move (keeps steppers enabled)
+    // motion_planner_is_busy() returns true if there's a move in progress or manual mode is active
+    if (homing_is_active() || motion_planner_is_busy(&planner)) {
+        any_axis_active = true;
+        // Update timestamps for all axes when planner is busy (prevents disabling during moves)
+        for (int i = 0; i < NUM_AXES; i++) {
+            last_command_time[i] = now;
+        }
+    }
+    
+    // Enable/disable steppers based on activity
+    if (any_axis_active) {
+        if (!steppers_enabled) {
+            board_set_enable(true);
+            steppers_enabled = true;
+            ESP_LOGI(TAG, "Steppers enabled (activity detected)");
+        }
+    } else {
+        if (steppers_enabled) {
+            board_set_enable(false);
+            steppers_enabled = false;
+            ESP_LOGI(TAG, "Steppers disabled (idle for 5 minutes)");
+        }
+    }
     
     // Check if homing is active
     if (homing_is_active()) {
@@ -112,6 +162,11 @@ void motion_controller_update(float dt) {
             float vel = homing_get_target_velocity();
             float velocities[3] = {0, 0, 0};
             velocities[homing_after.axis] = vel;
+            
+            // Update command timestamp for homing axis
+            int64_t now = esp_timer_get_time();
+            last_command_time[homing_after.axis] = now;
+            
             motion_planner_set_velocities(&planner, velocities);
             motion_planner_set_manual_mode(&planner, true);
         } else {
@@ -282,6 +337,14 @@ void motion_controller_set_velocities(const float velocities[3]) {
         return;
     }
     
+    // Update command timestamps for any axis with non-zero velocity
+    int64_t now = esp_timer_get_time();
+    for (int i = 0; i < NUM_AXES; i++) {
+        if (fabsf(velocities[i]) > 0.1f) {  // Small threshold
+            last_command_time[i] = now;
+        }
+    }
+    
     motion_planner_set_velocities(&planner, velocities);
     motion_planner_set_manual_mode(&planner, true);
 }
@@ -289,6 +352,18 @@ void motion_controller_set_velocities(const float velocities[3]) {
 bool motion_controller_home(uint8_t axis) {
     if (!controller_initialized) {
         return false;
+    }
+    
+    // Update command timestamps for homing axes
+    int64_t now = esp_timer_get_time();
+    if (axis == 255 || axis >= NUM_AXES) {
+        // Home all axes - update all timestamps
+        for (int i = 0; i < NUM_AXES; i++) {
+            last_command_time[i] = now;
+        }
+    } else {
+        // Home single axis
+        last_command_time[axis] = now;
     }
     
     // Home all axes sequentially if axis == 255
