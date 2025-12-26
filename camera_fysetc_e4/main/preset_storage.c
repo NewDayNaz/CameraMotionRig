@@ -149,8 +149,8 @@ void preset_init_default(preset_t* preset) {
         preset->pos[i] = 0.0f;
     }
     preset->easing_type = EASING_SMOOTHERSTEP;
-    preset->duration_s = 8.0f;  // 8 second default
-    preset->max_speed_scale = 0.0f;  // Use duration
+    preset->duration_s = 6.0f;  // 6 second default
+    preset->max_speed_scale = 1.0f;  // Use duration
     preset->arrival_overshoot = 0.0f;
     preset->approach_mode = APPROACH_DIRECT;
     preset->speed_multiplier = 1.0f;
