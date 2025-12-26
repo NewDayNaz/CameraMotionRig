@@ -63,6 +63,25 @@ static void serial_task(void* pvParameters) {
                             cmd.velocities[0], cmd.velocities[1], cmd.velocities[2]);
                     break;
                     
+                case CMD_JOYSTICK:
+                    // Convert joystick values (-32768 to 32768) to velocities
+                    // Scale to MAX_VELOCITY range
+                    float scaled_velocities[3];
+                    const float JOYSTICK_MAX = 32768.0f;
+                    const float MAX_VEL_PAN = 2000.0f;
+                    const float MAX_VEL_TILT = 2000.0f;
+                    const float MAX_VEL_ZOOM = 1500.0f;
+                    
+                    // Scale yaw (pan) from -32768..32768 to -MAX_VEL_PAN..MAX_VEL_PAN
+                    scaled_velocities[0] = (cmd.velocities[0] / JOYSTICK_MAX) * MAX_VEL_PAN;
+                    // Scale pitch (tilt) from -32768..32768 to -MAX_VEL_TILT..MAX_VEL_TILT
+                    scaled_velocities[1] = (cmd.velocities[1] / JOYSTICK_MAX) * MAX_VEL_TILT;
+                    // Scale zoom from -32768..32768 to -MAX_VEL_ZOOM..MAX_VEL_ZOOM
+                    scaled_velocities[2] = (cmd.velocities[2] / JOYSTICK_MAX) * MAX_VEL_ZOOM;
+                    
+                    motion_controller_set_velocities(scaled_velocities);
+                    break;
+                    
                 case CMD_GOTO:
                     // Move to preset
                     if (motion_controller_goto_preset(cmd.preset_index)) {

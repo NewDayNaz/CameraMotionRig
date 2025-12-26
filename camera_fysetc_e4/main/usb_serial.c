@@ -102,6 +102,49 @@ bool usb_serial_parse_command(parsed_cmd_t* cmd) {
                 cmd->velocities[i] = strtof(token, NULL);
             }
         }
+    } else if (strcmp(token, "j") == 0 || strncmp(line, "j,", 2) == 0) {
+        // Joystick command: j,yaw,pitch,zoom (values -32768 to 32768)
+        cmd->type = CMD_JOYSTICK;
+        // Parse comma-separated values (line format: j,yaw,pitch,zoom)
+        char* comma = strchr(line, ',');
+        if (comma != NULL) {
+            // Parse yaw (pan)
+            comma++;
+            char* next_comma = strchr(comma, ',');
+            if (next_comma != NULL) {
+                *next_comma = '\0';
+                int32_t yaw_int = (int32_t)atoi(comma);
+                cmd->velocities[0] = (float)yaw_int;  // Store raw value, will scale later
+                comma = next_comma + 1;
+                
+                // Parse pitch (tilt)
+                next_comma = strchr(comma, ',');
+                if (next_comma != NULL) {
+                    *next_comma = '\0';
+                    int32_t pitch_int = (int32_t)atoi(comma);
+                    cmd->velocities[1] = (float)pitch_int;
+                    comma = next_comma + 1;
+                    
+                    // Parse zoom (last value, may have trailing space)
+                    int32_t zoom_int = (int32_t)atoi(comma);
+                    cmd->velocities[2] = (float)zoom_int;
+                } else {
+                    // Only two values provided, set zoom to 0
+                    int32_t pitch_int = (int32_t)atoi(comma);
+                    cmd->velocities[1] = (float)pitch_int;
+                    cmd->velocities[2] = 0.0f;
+                }
+            } else {
+                // Only one value provided, set others to 0
+                int32_t yaw_int = (int32_t)atoi(comma);
+                cmd->velocities[0] = (float)yaw_int;
+                cmd->velocities[1] = 0.0f;
+                cmd->velocities[2] = 0.0f;
+            }
+        } else {
+            // No comma found, invalid format
+            cmd->type = CMD_UNKNOWN;
+        }
     } else if (strcmp(token, "GOTO") == 0) {
         cmd->type = CMD_GOTO;
         token = strtok_r(NULL, " \t", &saveptr);
@@ -148,6 +191,28 @@ bool usb_serial_parse_command(parsed_cmd_t* cmd) {
                 cmd->limits_max = strtof(token, NULL);
             }
         }
+    } else if (strcmp(token, "s") == 0) {
+        // Legacy: Save preset 0
+        cmd->type = CMD_SAVE;
+        cmd->preset_index = 0;
+    } else if (strncmp(token, "s", 1) == 0 && strlen(token) > 1) {
+        // Legacy: Save preset n (s2, s3, s4, etc.)
+        cmd->type = CMD_SAVE;
+        cmd->preset_index = (uint8_t)atoi(token + 1);
+    } else if (strcmp(token, "t") == 0) {
+        // Legacy: Goto preset 0
+        cmd->type = CMD_GOTO;
+        cmd->preset_index = 0;
+    } else if (strncmp(token, "t", 1) == 0 && strlen(token) > 1) {
+        // Legacy: Goto preset n (t2, t3, t4, etc.)
+        cmd->type = CMD_GOTO;
+        cmd->preset_index = (uint8_t)atoi(token + 1);
+    } else if (strcmp(token, "ea") == 0) {
+        // Legacy: Home all axes
+        cmd->type = CMD_HOME;
+    } else if (strcmp(token, "eb") == 0) {
+        // Legacy: Stop
+        cmd->type = CMD_STOP;
     } else {
         cmd->type = CMD_UNKNOWN;
     }

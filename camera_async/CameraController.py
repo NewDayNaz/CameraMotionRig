@@ -24,7 +24,7 @@ arduino_selected_pos = 1
 
 ARDUINO_ENABLE_SERIAL = True
 
-ARDUINO_PORT = "/dev/ttyACM0"  # put your port here (consolidated Arduino Uno R4 Minima)
+ARDUINO_PORT = "/dev/ttyACM0"  # ESP32 USB serial port (may be /dev/ttyUSB0 on some systems)
 ARDUINO_BAUDRATE = 115200
 
 arduino = None
@@ -33,15 +33,20 @@ if ARDUINO_ENABLE_SERIAL:
 
 
 def send_cmd(cmd):
+    """Send command to ESP32. Commands should end with newline."""
     if ARDUINO_ENABLE_SERIAL:
-        arduino.write(cmd + b" ")
+        # Ensure command ends with newline for proper parsing
+        if not cmd.endswith(b'\n'):
+            cmd = cmd + b'\n'
+        arduino.write(cmd)
 
 def send_joystick_values(yaw, pitch, zoom):
-    """Send joystick values to Arduino in format: j,yaw,pitch,zoom
-    Values should be integers from -32768 to 32768"""
+    """Send joystick values to ESP32 in format: j,yaw,pitch,zoom
+    Values should be integers from -32768 to 32768
+    ESP32 will scale these to appropriate velocity ranges"""
     if ARDUINO_ENABLE_SERIAL:
-        # Format: j,yaw,pitch,zoom
-        cmd = f"j,{int(yaw)},{int(pitch)},{int(zoom)} ".encode('ascii')
+        # Format: j,yaw,pitch,zoom\n (newline required for command parsing)
+        cmd = f"j,{int(yaw)},{int(pitch)},{int(zoom)}\n".encode('ascii')
         arduino.write(cmd)
 
 
@@ -53,7 +58,7 @@ def tell_cmd(msg):
 
 
 def serial_read_thread():
-    """Thread function to continuously read and display messages from Arduino"""
+    """Thread function to continuously read and display messages from ESP32"""
     if not ARDUINO_ENABLE_SERIAL or arduino is None:
         return
     
@@ -70,7 +75,7 @@ def serial_read_thread():
                     line, buffer = buffer.split('\n', 1)
                     line = line.strip()
                     if line:  # Only print non-empty lines
-                        print(f"[Arduino] {line}")
+                        print(f"[ESP32] {line}")
             else:
                 # Small sleep to prevent CPU spinning when no data
                 time.sleep(0.01)
@@ -170,34 +175,27 @@ while True:
 
                 if joy_back != arduino_back_last:
                     arduino_back_last = joy_back
-                    send_cmd(b"ea")
+                    # Home all axes
+                    send_cmd(b"HOME\n")
 
                 if joy_start != arduino_start_last:
                     arduino_start_last = joy_start
-                    send_cmd(b"eb")
+                    # Stop all motion
+                    send_cmd(b"STOP\n")
 
                 if joy_bumper_r != arduino_bumper_r_last:
                     arduino_bumper_r_last = joy_bumper_r
                     print("save position")
-                    if arduino_selected_pos == 1:
-                        send_cmd(b"s")
-                    if arduino_selected_pos == 2:
-                        send_cmd(b"s2")
-                    if arduino_selected_pos == 3:
-                        send_cmd(b"s3")
-                    if arduino_selected_pos == 4:
-                        send_cmd(b"s4")
+                    # Save current position as preset (0-indexed, so subtract 1)
+                    preset_idx = arduino_selected_pos - 1
+                    send_cmd(f"SAVE {preset_idx}\n".encode('ascii'))
+                    
                 if joy_bumper_l != arduino_bumper_l_last:
                     arduino_bumper_l_last = joy_bumper_l
                     print("goto saved position")
-                    if arduino_selected_pos == 1:
-                        send_cmd(b"t")
-                    if arduino_selected_pos == 2:
-                        send_cmd(b"t2")
-                    if arduino_selected_pos == 3:
-                        send_cmd(b"t3")
-                    if arduino_selected_pos == 4:
-                        send_cmd(b"t4")
+                    # Move to preset (0-indexed, so subtract 1)
+                    preset_idx = arduino_selected_pos - 1
+                    send_cmd(f"GOTO {preset_idx}\n".encode('ascii'))
 
                 # Speed control is now handled by Arduino based on joystick values
 

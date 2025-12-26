@@ -23,6 +23,7 @@
 typedef enum {
     CMD_NONE,
     CMD_VEL,        // VEL <pan> <tilt> <zoom>
+    CMD_JOYSTICK,   // j,yaw,pitch,zoom (values -32768 to 32768)
     CMD_GOTO,       // GOTO <n>
     CMD_SAVE,       // SAVE <n>
     CMD_HOME,       // HOME
