@@ -5,12 +5,14 @@
 
 #include "http_server.h"
 #include "motion_controller.h"
+#include "motion_planner.h"  // For MAX_VELOCITY_* macros
 #include "wifi_manager.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "cJSON.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 static const char* TAG = "http_server";
 static httpd_handle_t server_handle = NULL;
@@ -94,15 +96,15 @@ static const char html_page[] =
 "<h2>Velocity Control (Sliders)</h2>"
 "<div class=\"control-group\">"
 "<label>PAN: <span id=\"pan_val\">0.0</span> steps/s</label>"
-"<input type=\"range\" id=\"pan_vel\" min=\"-500\" max=\"500\" value=\"0\" step=\"5\">"
+"%SLIDER_PAN%"
 "</div>"
 "<div class=\"control-group\">"
 "<label>TILT: <span id=\"tilt_val\">0.0</span> steps/s</label>"
-"<input type=\"range\" id=\"tilt_vel\" min=\"-500\" max=\"500\" value=\"0\" step=\"5\">"
+"%SLIDER_TILT%"
 "</div>"
 "<div class=\"control-group\">"
 "<label>ZOOM: <span id=\"zoom_val\">0.0</span> steps/s</label>"
-"<input type=\"range\" id=\"zoom_vel\" min=\"-50\" max=\"50\" value=\"0\" step=\"1\">"
+"%SLIDER_ZOOM%"
 "</div>"
 "</div>"
 "<div class=\"section\">"
@@ -513,7 +515,98 @@ static const char html_page[] =
 // Handler for root path - serve HTML page
 static esp_err_t root_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "text/html");
-    httpd_resp_send(req, html_page, HTTPD_RESP_USE_STRLEN);
+    
+    // Format slider inputs using macro values
+    char slider_pan[128], slider_tilt[128], slider_zoom[128];
+    int pan_step = (MAX_VELOCITY_PAN >= 100.0f) ? 5 : 1;
+    int tilt_step = (MAX_VELOCITY_TILT >= 100.0f) ? 5 : 1;
+    
+    snprintf(slider_pan, sizeof(slider_pan), 
+             "<input type=\"range\" id=\"pan_vel\" min=\"-%.0f\" max=\"%.0f\" value=\"0\" step=\"%d\">",
+             MAX_VELOCITY_PAN, MAX_VELOCITY_PAN, pan_step);
+    snprintf(slider_tilt, sizeof(slider_tilt),
+             "<input type=\"range\" id=\"tilt_vel\" min=\"-%.0f\" max=\"%.0f\" value=\"0\" step=\"%d\">",
+             MAX_VELOCITY_TILT, MAX_VELOCITY_TILT, tilt_step);
+    snprintf(slider_zoom, sizeof(slider_zoom),
+             "<input type=\"range\" id=\"zoom_vel\" min=\"-%.0f\" max=\"%.0f\" value=\"0\" step=\"1\">",
+             MAX_VELOCITY_ZOOM, MAX_VELOCITY_ZOOM);
+    
+    // Replace placeholders in HTML
+    // Calculate buffer size needed (original size + slider strings - placeholder strings)
+    size_t html_len = strlen(html_page);
+    size_t slider_pan_len = strlen(slider_pan);
+    size_t slider_tilt_len = strlen(slider_tilt);
+    size_t slider_zoom_len = strlen(slider_zoom);
+    size_t placeholder_len = strlen("%SLIDER_PAN%") + strlen("%SLIDER_TILT%") + strlen("%SLIDER_ZOOM%");
+    size_t buffer_size = html_len - placeholder_len + slider_pan_len + slider_tilt_len + slider_zoom_len + 1;
+    
+    char *html_buffer = malloc(buffer_size);
+    if (html_buffer == NULL) {
+        ESP_LOGE(TAG, "Failed to allocate memory for HTML");
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    
+    // Replace placeholders using simple string replacement
+    char *html_work = (char *)html_page;
+    char *output = html_buffer;
+    const char *placeholder_pan = "%SLIDER_PAN%";
+    const char *placeholder_tilt = "%SLIDER_TILT%";
+    const char *placeholder_zoom = "%SLIDER_ZOOM%";
+    
+    // Replace %SLIDER_PAN%
+    char *pos = strstr(html_work, placeholder_pan);
+    if (pos) {
+        size_t len = pos - html_work;
+        memcpy(output, html_work, len);
+        output += len;
+        memcpy(output, slider_pan, slider_pan_len);
+        output += slider_pan_len;
+        html_work = pos + strlen(placeholder_pan);
+    } else {
+        free(html_buffer);
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    
+    // Replace %SLIDER_TILT%
+    pos = strstr(html_work, placeholder_tilt);
+    if (pos) {
+        size_t len = pos - html_work;
+        memcpy(output, html_work, len);
+        output += len;
+        memcpy(output, slider_tilt, slider_tilt_len);
+        output += slider_tilt_len;
+        html_work = pos + strlen(placeholder_tilt);
+    } else {
+        free(html_buffer);
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    
+    // Replace %SLIDER_ZOOM%
+    pos = strstr(html_work, placeholder_zoom);
+    if (pos) {
+        size_t len = pos - html_work;
+        memcpy(output, html_work, len);
+        output += len;
+        memcpy(output, slider_zoom, slider_zoom_len);
+        output += slider_zoom_len;
+        html_work = pos + strlen(placeholder_zoom);
+    } else {
+        free(html_buffer);
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    
+    // Copy remaining suffix
+    size_t suffix_len = strlen(html_work);
+    memcpy(output, html_work, suffix_len);
+    output += suffix_len;
+    *output = '\0';
+    
+    httpd_resp_send(req, html_buffer, HTTPD_RESP_USE_STRLEN);
+    free(html_buffer);
     return ESP_OK;
 }
 
