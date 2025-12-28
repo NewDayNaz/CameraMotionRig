@@ -56,6 +56,23 @@ void motion_planner_init(motion_planner_t* planner, segment_queue_t* queue) {
         planner->limits_max[i] = 100000.0f * MICROSTEP_SCALE;
     }
     
+    // Set pan axis limits to 240 degrees total range (±120 degrees from home)
+    // Calculate limits in full steps, then convert to microsteps
+    float pan_max_steps = (PAN_MAX_DEGREES / 2.0f) * PAN_STEPS_PER_DEGREE;  // ±120 degrees
+    planner->limits_min[AXIS_PAN] = -pan_max_steps * MICROSTEP_SCALE;
+    planner->limits_max[AXIS_PAN] = pan_max_steps * MICROSTEP_SCALE;
+    ESP_LOGI(TAG, "Pan axis limits set to ±%.1f degrees (%.1f to %.1f steps)", 
+             PAN_MAX_DEGREES / 2.0f, -pan_max_steps, pan_max_steps);
+    
+    // Set tilt axis limits with separate down (negative) and up (positive) limits
+    // Down angle is less than up angle
+    float tilt_down_steps = TILT_MAX_DEGREES_DOWN * TILT_STEPS_PER_DEGREE;  // Down (negative)
+    float tilt_up_steps = TILT_MAX_DEGREES_UP * TILT_STEPS_PER_DEGREE;       // Up (positive)
+    planner->limits_min[AXIS_TILT] = -tilt_down_steps * MICROSTEP_SCALE;
+    planner->limits_max[AXIS_TILT] = tilt_up_steps * MICROSTEP_SCALE;
+    ESP_LOGI(TAG, "Tilt axis limits set to -%.1f° (down) to +%.1f° (up) (%.1f to %.1f steps)", 
+             TILT_MAX_DEGREES_DOWN, TILT_MAX_DEGREES_UP, -tilt_down_steps, tilt_up_steps);
+    
     planner->precision_multiplier = 0.25f;
     planner->precision_mode = false;
     planner->move_easing = EASING_SMOOTHERSTEP;

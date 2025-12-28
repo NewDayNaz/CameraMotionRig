@@ -39,9 +39,12 @@ JOYSTICK_SEND_THRESHOLD = 500  # Only send if change is > 1.5% of full range
 # 3.0 = cubic curve (even more gentle at start)
 JOYSTICK_CURVE_EXPONENT = 2.5  # Quadratic-like curve for better low-end control
 
-# Deadzone threshold - values within this range are treated as zero
+# Deadzone thresholds - values within this range are treated as zero
 # Prevents drift and unwanted movement when joystick is centered
-JOYSTICK_DEADZONE = 2000  # ~6% of full range (32768)
+# Can be tuned per-axis for different sensitivity requirements
+JOYSTICK_DEADZONE_YAW = 2000    # ~6% of full range (32768) for pan axis
+JOYSTICK_DEADZONE_PITCH = 2000  # ~6% of full range (32768) for tilt axis
+JOYSTICK_DEADZONE_ZOOM = 10    # ~1.5% of full range (32768) for zoom axis (smaller for more sensitive control)
 
 # Independent axis scaling factors (0.0 to 1.0)
 # Allows fine-tuning sensitivity per axis
@@ -50,7 +53,7 @@ JOYSTICK_SCALE_YAW = 1.0    # Pan axis (full sensitivity)
 JOYSTICK_SCALE_PITCH = 0.8  # Tilt axis (reduced sensitivity for smoother control)
 JOYSTICK_SCALE_ZOOM = 1.0   # Zoom axis (full sensitivity)
 
-def apply_joystick_curve(value, max_value):
+def apply_joystick_curve(value, max_value, deadzone):
     """
     Apply a non-linear curve to joystick input for better sensitivity control.
     Small movements are reduced, full deflection still reaches maximum.
@@ -59,12 +62,13 @@ def apply_joystick_curve(value, max_value):
     Args:
         value: Raw joystick value (-max_value to max_value)
         max_value: Maximum joystick value (32768)
+        deadzone: Deadzone threshold for this axis
     
     Returns:
         Curved value with same sign and range, or 0.0 if in deadzone
     """
     # Apply deadzone - treat small values as zero
-    if abs(value) < JOYSTICK_DEADZONE:
+    if abs(value) < deadzone:
         return 0.0
     
     # Normalize to -1.0 to 1.0
@@ -609,9 +613,9 @@ while True:
                 joystick_zoom_raw = (joy_trigger_r - joy_trigger_l) * JOYSTICK_MAX_INT
                 
                 # Apply non-linear curve to reduce sensitivity at small deflections
-                joystick_yaw_curved = apply_joystick_curve(joystick_yaw_raw, JOYSTICK_MAX_INT)
-                joystick_pitch_curved = apply_joystick_curve(joystick_pitch_raw, JOYSTICK_MAX_INT)
-                joystick_zoom_curved = apply_joystick_curve(joystick_zoom_raw, JOYSTICK_MAX_INT)
+                joystick_yaw_curved = apply_joystick_curve(joystick_yaw_raw, JOYSTICK_MAX_INT, JOYSTICK_DEADZONE_YAW)
+                joystick_pitch_curved = apply_joystick_curve(joystick_pitch_raw, JOYSTICK_MAX_INT, JOYSTICK_DEADZONE_PITCH)
+                joystick_zoom_curved = apply_joystick_curve(joystick_zoom_raw, JOYSTICK_MAX_INT, JOYSTICK_DEADZONE_ZOOM)
                 
                 # Apply exponential smoothing to reduce jerkiness
                 # Formula: smoothed = smoothing * new + (1 - smoothing) * old
@@ -629,14 +633,18 @@ while True:
                 
                 # Detect when axes enter deadzone (transition from non-zero to zero)
                 # We need to send explicit zero commands to stop drift
-                # Use scaled values for deadzone detection
-                yaw_in_deadzone = abs(joystick_yaw_scaled) < 100
-                pitch_in_deadzone = abs(joystick_pitch_scaled) < 100
-                zoom_in_deadzone = abs(joystick_zoom_scaled) < 100
+                # Use scaled values for deadzone detection (apply scaling factor to deadzone thresholds)
+                yaw_deadzone_scaled = JOYSTICK_DEADZONE_YAW * JOYSTICK_SCALE_YAW
+                pitch_deadzone_scaled = JOYSTICK_DEADZONE_PITCH * JOYSTICK_SCALE_PITCH
+                zoom_deadzone_scaled = JOYSTICK_DEADZONE_ZOOM * JOYSTICK_SCALE_ZOOM
                 
-                yaw_entered_deadzone = not (abs(joystick_yaw_last) < 100) and yaw_in_deadzone
-                pitch_entered_deadzone = not (abs(joystick_pitch_last) < 100) and pitch_in_deadzone
-                zoom_entered_deadzone = not (abs(joystick_zoom_last) < 100) and zoom_in_deadzone
+                yaw_in_deadzone = abs(joystick_yaw_scaled) < yaw_deadzone_scaled
+                pitch_in_deadzone = abs(joystick_pitch_scaled) < pitch_deadzone_scaled
+                zoom_in_deadzone = abs(joystick_zoom_scaled) < zoom_deadzone_scaled
+                
+                yaw_entered_deadzone = not (abs(joystick_yaw_last) < yaw_deadzone_scaled) and yaw_in_deadzone
+                pitch_entered_deadzone = not (abs(joystick_pitch_last) < pitch_deadzone_scaled) and pitch_in_deadzone
+                zoom_entered_deadzone = not (abs(joystick_zoom_last) < zoom_deadzone_scaled) and zoom_in_deadzone
                 
                 # Rate limiting: only send if enough time has passed
                 current_time = time.time()

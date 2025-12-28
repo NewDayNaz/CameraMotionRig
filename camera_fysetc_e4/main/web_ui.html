@@ -93,6 +93,55 @@ button { padding: 10px 20px; margin: 5px; font-size: 16px; cursor: pointer; bord
 <button class="btn-secondary" onclick="sendCommand('precision')">Toggle Precision</button>
 </div>
 <div class="section">
+<h2>Tilt Limit Calibration</h2>
+<p style="color: #666; font-size: 14px;">Calibrate tilt axis limits by setting the midpoint (home position) and two physical stops (Down and Up). The system calculates the values needed to update in <code>motion_planner.h</code>. Note: Down angle (negative) will be less than Up angle (positive).</p>
+<p style="color: #666; font-size: 13px; margin-top: 10px;"><strong>Instructions:</strong></p>
+<ol style="color: #666; font-size: 13px; margin-left: 20px; margin-top: 5px;">
+<li><strong>Home the camera first</strong> (click "Home All Axes" above) - this sets the midpoint to position 0</li>
+<li>Click "Set Midpoint" to capture the home position (should be 0 or close to 0)</li>
+<li>Move the camera to the <strong>down</strong> physical stop and click "Set Stop Down"</li>
+<li>Move the camera to the <strong>up</strong> physical stop and click "Set Stop Up"</li>
+<li>Click "Calculate Values" to get the calibration results</li>
+<li>Update the calculated values in <code>motion_planner.h</code> and rebuild the firmware</li>
+</ol>
+<p style="color: #d32f2f; font-size: 12px; margin-top: 10px; font-weight: bold;">⚠️ Important: The camera must reset to the same midpoint position after homing for the calculated limits to work correctly.</p>
+<div style="margin: 15px 0;">
+<div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 15px;">
+<button class="btn-secondary" onclick="setCalibrationPoint('midpoint')">Set Midpoint</button>
+<button class="btn-secondary" onclick="setCalibrationPoint('stop_down')">Set Stop Down</button>
+<button class="btn-secondary" onclick="setCalibrationPoint('stop_up')">Set Stop Up</button>
+</div>
+<button class="btn-warning" onclick="resetCalibration()" style="margin-bottom: 15px;">Reset Calibration</button>
+<div id="calibration_status" style="padding: 10px; margin: 10px 0; border-radius: 5px; background: #f5f5f5; min-height: 20px;">
+<div><strong>Midpoint:</strong> <span id="cal_midpoint">Not set</span></div>
+<div><strong>Stop Down:</strong> <span id="cal_stop_down">Not set</span></div>
+<div><strong>Stop Up:</strong> <span id="cal_stop_up">Not set</span></div>
+</div>
+<button class="btn-primary" onclick="calculateCalibration()" style="margin-top: 10px;">Calculate Values</button>
+<div id="calibration_results" style="margin-top: 15px; padding: 15px; border-radius: 5px; background: #e8f5e9; display: none;">
+<h3 style="margin-top: 0; color: #2e7d32;">Calibration Results</h3>
+<p style="color: #666; font-size: 14px; margin-bottom: 15px;">Update these values in <code>motion_planner.h</code>:</p>
+<div style="background: white; padding: 15px; border-radius: 5px; font-family: monospace; font-size: 13px; line-height: 1.8;">
+<div style="margin-bottom: 10px;"><strong>Constants to update:</strong></div>
+<div style="background: #f5f5f5; padding: 10px; border-radius: 3px; margin-bottom: 10px;">
+<div>#define TILT_STEPS_PER_DEGREE <span id="result_steps_per_degree">-</span></div>
+<div>#define TILT_MAX_DEGREES_DOWN <span id="result_max_degrees_down">-</span></div>
+<div>#define TILT_MAX_DEGREES_UP <span id="result_max_degrees_up">-</span></div>
+</div>
+<div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #ddd;">
+<strong>Calculated Limits (in steps, relative to midpoint = 0):</strong><br>
+Min (Down): <span id="result_min_steps">-</span> steps<br>
+Max (Up): <span id="result_max_steps">-</span> steps<br>
+<span style="color: #666; font-size: 11px;">(These are automatically calculated in motion_planner.c based on the constants above)</span>
+</div>
+<div style="margin-top: 15px; padding-top: 10px; border-top: 1px solid #ddd; color: #666; font-size: 12px;">
+<strong>Note:</strong> After updating the code, rebuild and flash the firmware. The limits will be automatically set based on these values when the system initializes.
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="section">
 <h2>Firmware Update (OTA)</h2>
 <p style="color: #666; font-size: 14px;">Upload a new firmware binary file to update the device over-the-air.</p>
 <input type="file" id="firmware_file" accept=".bin" style="margin: 10px 0; padding: 5px; width: 100%; max-width: 400px; border: 1px solid #ddd; border-radius: 4px;">
@@ -578,6 +627,98 @@ function uploadFirmware() {
     }
   });
 }
+let calibrationData = {
+  midpoint: null,
+  stop_down: null,
+  stop_up: null
+};
+
+function setCalibrationPoint(type) {
+  fetch('/api/positions').then(r => r.json()).then(data => {
+    if (data && typeof data.tilt === 'number') {
+      calibrationData[type] = data.tilt;
+      updateCalibrationStatus();
+    } else {
+      alert('Failed to get current position');
+    }
+  }).catch(e => {
+    console.error('Failed to get position:', e);
+    alert('Failed to get current position');
+  });
+}
+
+function updateCalibrationStatus() {
+  document.getElementById('cal_midpoint').textContent = 
+    calibrationData.midpoint !== null ? calibrationData.midpoint.toFixed(2) + ' steps' : 'Not set';
+  document.getElementById('cal_stop_down').textContent = 
+    calibrationData.stop_down !== null ? calibrationData.stop_down.toFixed(2) + ' steps' : 'Not set';
+  document.getElementById('cal_stop_up').textContent = 
+    calibrationData.stop_up !== null ? calibrationData.stop_up.toFixed(2) + ' steps' : 'Not set';
+}
+
+function resetCalibration() {
+  calibrationData = {
+    midpoint: null,
+    stop_down: null,
+    stop_up: null
+  };
+  updateCalibrationStatus();
+  document.getElementById('calibration_results').style.display = 'none';
+}
+
+function calculateCalibration() {
+  if (calibrationData.midpoint === null || calibrationData.stop_down === null || calibrationData.stop_up === null) {
+    alert('Please set all three points (Midpoint, Stop Down, and Stop Up) before calculating.');
+    return;
+  }
+  
+  // Calculate relative positions from midpoint (in steps)
+  // Midpoint is treated as position 0 (home position)
+  const down_relative = calibrationData.stop_down - calibrationData.midpoint;
+  const up_relative = calibrationData.stop_up - calibrationData.midpoint;
+  
+  // Down should be negative (less than midpoint), Up should be positive (greater than midpoint)
+  // Ensure we have the correct min (down, negative) and max (up, positive)
+  const min_relative = Math.min(down_relative, up_relative);  // Should be negative (down)
+  const max_relative = Math.max(down_relative, up_relative);  // Should be positive (up)
+  
+  // Calculate total range in steps
+  const total_range_steps = max_relative - min_relative;
+  
+  // To calculate steps per degree, we need to know the actual degrees
+  // We'll use a typical camera tilt range as a reference (e.g., 90 degrees total)
+  // or calculate from a reasonable assumption
+  // For now, let's use the approach: calculate steps per degree from a typical range
+  // Typical camera tilt: down ~30 degrees, up ~60 degrees = 90 degrees total
+  // But we'll calculate based on the actual measured range
+  
+  // Estimate: if we assume a typical steps_per_degree (like 0.556 for 200 steps/rev motor)
+  // we can calculate the degrees, then refine steps_per_degree
+  const typical_steps_per_degree = 0.556; // Typical value for 200 steps/rev motor
+  const estimated_degrees_down = Math.abs(min_relative) / typical_steps_per_degree;
+  const estimated_degrees_up = Math.abs(max_relative) / typical_steps_per_degree;
+  const estimated_total_degrees = estimated_degrees_down + estimated_degrees_up;
+  
+  // Now calculate actual steps per degree from the total range
+  const steps_per_degree = total_range_steps / estimated_total_degrees;
+  
+  // Recalculate degrees with the refined steps_per_degree
+  const degrees_down_actual = Math.abs(min_relative) / steps_per_degree;
+  const degrees_up_actual = Math.abs(max_relative) / steps_per_degree;
+  
+  // Display results
+  document.getElementById('result_steps_per_degree').textContent = steps_per_degree.toFixed(6) + 'f';
+  document.getElementById('result_max_degrees_down').textContent = degrees_down_actual.toFixed(2) + 'f';
+  document.getElementById('result_max_degrees_up').textContent = degrees_up_actual.toFixed(2) + 'f';
+  document.getElementById('result_min_steps').textContent = min_relative.toFixed(2);
+  document.getElementById('result_max_steps').textContent = max_relative.toFixed(2);
+  
+  document.getElementById('calibration_results').style.display = 'block';
+  
+  // Scroll to results
+  document.getElementById('calibration_results').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
 setTimeout(function() {
   try {
     updatePositions();
