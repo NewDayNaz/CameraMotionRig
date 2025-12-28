@@ -31,7 +31,7 @@ last_send_time = 0.0
 MIN_SEND_INTERVAL = 0.05  # Send at most 20 times per second (50ms between sends)
 
 # Threshold for sending updates (larger = less frequent sends)
-JOYSTICK_SEND_THRESHOLD = 500  # Only send if change is > 1.5% of full range
+JOYSTICK_SEND_THRESHOLD = 15  # Only send if change is > 1.5% of full range
 
 # Joystick curve exponent for non-linear response
 # Values > 1.0 make small movements less sensitive (more control at low deflection)
