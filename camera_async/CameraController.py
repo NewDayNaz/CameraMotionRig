@@ -610,12 +610,31 @@ while True:
                 
                 # Combine triggers for zoom (left trigger = zoom out, right trigger = zoom in)
                 # Negative value = zoom out, positive = zoom in
-                joystick_zoom_raw = (joy_trigger_r - joy_trigger_l) * JOYSTICK_MAX_INT
+                # Triggers are normalized 0-1.0, so difference ranges from -1.0 to 1.0
+                trigger_diff = joy_trigger_r - joy_trigger_l
+                
+                # Apply deadzone to normalized trigger difference (0-1.0 range)
+                # Convert deadzone from full range (32768) to normalized range (0-1.0)
+                zoom_deadzone_normalized = JOYSTICK_DEADZONE_ZOOM / JOYSTICK_MAX_INT
+                
+                if abs(trigger_diff) < zoom_deadzone_normalized:
+                    joystick_zoom_curved = 0.0
+                else:
+                    # Apply curve to normalized value, then scale back
+                    sign = 1.0 if trigger_diff >= 0 else -1.0
+                    abs_normalized = abs(trigger_diff)
+                    # Normalize after deadzone removal
+                    normalized = (abs_normalized - zoom_deadzone_normalized) / (1.0 - zoom_deadzone_normalized)
+                    # Clamp to 0-1.0 range (safety check)
+                    normalized = max(0.0, min(1.0, normalized))
+                    # Apply curve
+                    curved = sign * (normalized ** JOYSTICK_CURVE_EXPONENT)
+                    # Scale back to full range
+                    joystick_zoom_curved = curved * JOYSTICK_MAX_INT
                 
                 # Apply non-linear curve to reduce sensitivity at small deflections
                 joystick_yaw_curved = apply_joystick_curve(joystick_yaw_raw, JOYSTICK_MAX_INT, JOYSTICK_DEADZONE_YAW)
                 joystick_pitch_curved = apply_joystick_curve(joystick_pitch_raw, JOYSTICK_MAX_INT, JOYSTICK_DEADZONE_PITCH)
-                joystick_zoom_curved = apply_joystick_curve(joystick_zoom_raw, JOYSTICK_MAX_INT, JOYSTICK_DEADZONE_ZOOM)
                 
                 # Apply exponential smoothing to reduce jerkiness
                 # Formula: smoothed = smoothing * new + (1 - smoothing) * old
