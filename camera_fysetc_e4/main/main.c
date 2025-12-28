@@ -74,7 +74,7 @@ static void serial_task(void* pvParameters) {
                     // Reduced max velocities for smoother, less jerky control
                     const float MAX_VEL_PAN = 200.0f;   // Full steps/sec (was 500)
                     const float MAX_VEL_TILT = 200.0f;  // Full steps/sec (was 500)
-                    const float MAX_VEL_ZOOM = 30.0f;   // Full steps/sec (was 50)
+                    const float MAX_VEL_ZOOM = 50.0f;   // Full steps/sec (was 50)
                     
                     // Scale yaw (pan) from -32768..32768 to -MAX_VEL_PAN..MAX_VEL_PAN
                     scaled_velocities[0] = (cmd.velocities[0] / JOYSTICK_MAX) * MAX_VEL_PAN;

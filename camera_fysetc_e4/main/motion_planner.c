@@ -61,8 +61,9 @@ void motion_planner_init(motion_planner_t* planner, segment_queue_t* queue) {
     float pan_max_steps = (PAN_MAX_DEGREES / 2.0f) * PAN_STEPS_PER_DEGREE;  // ±120 degrees
     planner->limits_min[AXIS_PAN] = -pan_max_steps * MICROSTEP_SCALE;
     planner->limits_max[AXIS_PAN] = pan_max_steps * MICROSTEP_SCALE;
-    ESP_LOGI(TAG, "Pan axis limits set to ±%.1f degrees (%.1f to %.1f steps)", 
-             PAN_MAX_DEGREES / 2.0f, -pan_max_steps, pan_max_steps);
+    ESP_LOGI(TAG, "Pan axis limits set to ±%.1f degrees (%.1f to %.1f steps, %.1f to %.1f microsteps)", 
+             PAN_MAX_DEGREES / 2.0f, -pan_max_steps, pan_max_steps, 
+             planner->limits_min[AXIS_PAN], planner->limits_max[AXIS_PAN]);
     
     // Set tilt axis limits with separate down (negative) and up (positive) limits
     // Down angle is less than up angle
@@ -70,8 +71,9 @@ void motion_planner_init(motion_planner_t* planner, segment_queue_t* queue) {
     float tilt_up_steps = TILT_MAX_DEGREES_UP * TILT_STEPS_PER_DEGREE;       // Up (positive)
     planner->limits_min[AXIS_TILT] = -tilt_down_steps * MICROSTEP_SCALE;
     planner->limits_max[AXIS_TILT] = tilt_up_steps * MICROSTEP_SCALE;
-    ESP_LOGI(TAG, "Tilt axis limits set to -%.1f° (down) to +%.1f° (up) (%.1f to %.1f steps)", 
-             TILT_MAX_DEGREES_DOWN, TILT_MAX_DEGREES_UP, -tilt_down_steps, tilt_up_steps);
+    ESP_LOGI(TAG, "Tilt axis limits set to -%.1f° (down) to +%.1f° (up) (%.1f to %.1f steps, %.1f to %.1f microsteps)", 
+             TILT_MAX_DEGREES_DOWN, TILT_MAX_DEGREES_UP, -tilt_down_steps, tilt_up_steps,
+             planner->limits_min[AXIS_TILT], planner->limits_max[AXIS_TILT]);
     
     planner->precision_multiplier = 0.25f;
     planner->precision_mode = false;
@@ -140,6 +142,8 @@ bool motion_planner_plan_move(motion_planner_t* planner, const float targets[NUM
     // Check soft limits
     for (int i = 0; i < NUM_AXES; i++) {
         if (targets[i] < planner->limits_min[i] || targets[i] > planner->limits_max[i]) {
+            ESP_LOGE(TAG, "Target out of limits for axis %d: target=%.1f, min=%.1f, max=%.1f", 
+                     i, targets[i], planner->limits_min[i], planner->limits_max[i]);
             return false;  // Target out of limits
         }
     }
