@@ -385,7 +385,10 @@ void motion_planner_update(motion_planner_t* planner, float dt) {
                 // Use the quintic curve directly - the duration calculation ensures we don't exceed limits
                 float steps_float = pos_end - pos_start;
                 
-                seg.steps[i] = (int32_t)roundf(steps_float);
+                // Round to integer steps
+                // Position will be synced with executor after move completes to prevent drift
+                int32_t steps_int = (int32_t)roundf(steps_float);
+                seg.steps[i] = steps_int;
             }
             
             segment_queue_push(planner->queue, &seg);
@@ -394,13 +397,15 @@ void motion_planner_update(motion_planner_t* planner, float dt) {
         
         // Check if move is complete
         if (current_time >= planner->move_duration) {
-            // Snap to final positions
-            for (int i = 0; i < NUM_AXES; i++) {
-                planner->positions[i] = planner->targets[i];
+            // Wait for queue to drain before syncing position
+            // This ensures all segments have been executed
+            if (segment_queue_free_slots(planner->queue) == SEGMENT_QUEUE_SIZE) {
+                // All segments executed - sync position from executor (source of truth)
+                // This prevents drift from rounding errors in segment generation
+                planner->move_in_progress = false;
+                planner->move_start_time = -1.0f;  // Reset for next move
+                current_time = 0.0f;
             }
-            planner->move_in_progress = false;
-            planner->move_start_time = -1.0f;  // Reset for next move
-            current_time = 0.0f;
         }
     }
 }

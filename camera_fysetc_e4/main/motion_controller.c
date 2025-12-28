@@ -82,6 +82,23 @@ void motion_controller_update(float dt) {
         return;
     }
     
+    // Check if a preset move just completed and sync positions
+    // Only sync after preset moves (not manual mode) to prevent drift from rounding errors
+    static bool was_preset_move_in_progress = false;
+    bool is_preset_move_in_progress = planner.move_in_progress && !planner.manual_mode;
+    
+    if (was_preset_move_in_progress && !is_preset_move_in_progress) {
+        // Preset move just completed - sync planner positions with executor (source of truth)
+        // This ensures position tracking matches actual hardware position
+        // Prevents drift from rounding errors in segment generation
+        for (int i = 0; i < NUM_AXES; i++) {
+            int32_t executor_pos = stepper_executor_get_position(i);
+            motion_planner_set_position(&planner, i, (float)executor_pos);
+        }
+        ESP_LOGD(TAG, "Synced planner positions with executor after preset move completion");
+    }
+    was_preset_move_in_progress = is_preset_move_in_progress;
+    
     // Update motion planner
     motion_planner_update(&planner, dt);
     
