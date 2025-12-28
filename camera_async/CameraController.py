@@ -43,6 +43,13 @@ JOYSTICK_CURVE_EXPONENT = 2.5  # Quadratic-like curve for better low-end control
 # Prevents drift and unwanted movement when joystick is centered
 JOYSTICK_DEADZONE = 2000  # ~6% of full range (32768)
 
+# Independent axis scaling factors (0.0 to 1.0)
+# Allows fine-tuning sensitivity per axis
+# Lower values = less responsive, higher values = more responsive
+JOYSTICK_SCALE_YAW = 1.0    # Pan axis (full sensitivity)
+JOYSTICK_SCALE_PITCH = 0.8  # Tilt axis (reduced sensitivity for smoother control)
+JOYSTICK_SCALE_ZOOM = 1.0   # Zoom axis (full sensitivity)
+
 def apply_joystick_curve(value, max_value):
     """
     Apply a non-linear curve to joystick input for better sensitivity control.
@@ -615,11 +622,17 @@ while True:
                 joystick_zoom_smoothed = (JOYSTICK_SMOOTHING * joystick_zoom_curved + 
                                          (1.0 - JOYSTICK_SMOOTHING) * joystick_zoom_smoothed)
                 
+                # Apply independent axis scaling for fine-tuning sensitivity
+                joystick_yaw_scaled = joystick_yaw_smoothed * JOYSTICK_SCALE_YAW
+                joystick_pitch_scaled = joystick_pitch_smoothed * JOYSTICK_SCALE_PITCH
+                joystick_zoom_scaled = joystick_zoom_smoothed * JOYSTICK_SCALE_ZOOM
+                
                 # Detect when axes enter deadzone (transition from non-zero to zero)
                 # We need to send explicit zero commands to stop drift
-                yaw_in_deadzone = abs(joystick_yaw_smoothed) < 100
-                pitch_in_deadzone = abs(joystick_pitch_smoothed) < 100
-                zoom_in_deadzone = abs(joystick_zoom_smoothed) < 100
+                # Use scaled values for deadzone detection
+                yaw_in_deadzone = abs(joystick_yaw_scaled) < 100
+                pitch_in_deadzone = abs(joystick_pitch_scaled) < 100
+                zoom_in_deadzone = abs(joystick_zoom_scaled) < 100
                 
                 yaw_entered_deadzone = not (abs(joystick_yaw_last) < 100) and yaw_in_deadzone
                 pitch_entered_deadzone = not (abs(joystick_pitch_last) < 100) and pitch_in_deadzone
@@ -634,9 +647,9 @@ while True:
                 # 2. Any axis entered deadzone (need to send zero to stop drift)
                 should_send = False
                 if time_since_last_send >= MIN_SEND_INTERVAL:
-                    if (abs(joystick_yaw_smoothed - joystick_yaw_last) > JOYSTICK_SEND_THRESHOLD or
-                        abs(joystick_pitch_smoothed - joystick_pitch_last) > JOYSTICK_SEND_THRESHOLD or
-                        abs(joystick_zoom_smoothed - joystick_zoom_last) > JOYSTICK_SEND_THRESHOLD):
+                    if (abs(joystick_yaw_scaled - joystick_yaw_last) > JOYSTICK_SEND_THRESHOLD or
+                        abs(joystick_pitch_scaled - joystick_pitch_last) > JOYSTICK_SEND_THRESHOLD or
+                        abs(joystick_zoom_scaled - joystick_zoom_last) > JOYSTICK_SEND_THRESHOLD):
                         should_send = True
                 
                 # Always send when entering deadzone to stop drift (bypass rate limiting)
@@ -644,28 +657,28 @@ while True:
                     should_send = True
                     # Force zero for axes that entered deadzone
                     if yaw_entered_deadzone:
-                        joystick_yaw_smoothed = 0.0
+                        joystick_yaw_scaled = 0.0
                     if pitch_entered_deadzone:
-                        joystick_pitch_smoothed = 0.0
+                        joystick_pitch_scaled = 0.0
                     if zoom_entered_deadzone:
-                        joystick_zoom_smoothed = 0.0
+                        joystick_zoom_scaled = 0.0
                 
                 if should_send:
-                    send_joystick_values(int(joystick_yaw_smoothed), 
-                                         int(joystick_pitch_smoothed), 
-                                         int(joystick_zoom_smoothed))
-                    joystick_yaw_last = joystick_yaw_smoothed
-                    joystick_pitch_last = joystick_pitch_smoothed
-                    joystick_zoom_last = joystick_zoom_smoothed
+                    send_joystick_values(int(joystick_yaw_scaled), 
+                                         int(joystick_pitch_scaled), 
+                                         int(joystick_zoom_scaled))
+                    joystick_yaw_last = joystick_yaw_scaled
+                    joystick_pitch_last = joystick_pitch_scaled
+                    joystick_zoom_last = joystick_zoom_scaled
                     last_send_time = current_time
                     
                     print(
                         "Joy | Yaw:",
-                        f"{joystick_yaw_smoothed:.0f}",
+                        f"{joystick_yaw_scaled:.0f}",
                         "| Pitch:",
-                        f"{joystick_pitch_smoothed:.0f}",
+                        f"{joystick_pitch_scaled:.0f}",
                         "| Zoom:",
-                        f"{joystick_zoom_smoothed:.0f}",
+                        f"{joystick_zoom_scaled:.0f}",
                     )
 
     except KeyboardInterrupt:
