@@ -117,15 +117,20 @@ static bool IRAM_ATTR timer_isr_callback(gptimer_handle_t timer, const gptimer_a
                     // Only set direction when starting a new step (when pulse state is false)
                     if (!executor_state.step_pulse_state[axis]) {
                         gpio_num_t dir_pin = dir_pins[axis];
+                        // Invert direction for PAN axis (axis 0) to fix left/right issue
+                        int32_t dir = executor_state.step_direction[axis];
+                        if (axis == AXIS_PAN) {
+                            dir = -dir;  // Invert PAN direction
+                        }
                         // GPIO32-39 use different registers (GPIO_OUT1) on ESP32
                         if (dir_pin >= 32) {
-                            if (executor_state.step_direction[axis] > 0) {
+                            if (dir > 0) {
                                 REG_WRITE(GPIO_OUT1_W1TS_REG, (1ULL << (dir_pin - 32)));
                             } else {
                                 REG_WRITE(GPIO_OUT1_W1TC_REG, (1ULL << (dir_pin - 32)));
                             }
                         } else {
-                        if (executor_state.step_direction[axis] > 0) {
+                        if (dir > 0) {
                             REG_WRITE(GPIO_OUT_W1TS_REG, (1ULL << dir_pin));
                         } else {
                             REG_WRITE(GPIO_OUT_W1TC_REG, (1ULL << dir_pin));
