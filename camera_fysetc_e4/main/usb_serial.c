@@ -191,8 +191,6 @@ bool usb_serial_parse_command(parsed_cmd_t* cmd) {
                 cmd->limits_max = strtof(token, NULL);
             }
         }
-    } else if (strcmp(token, "BOOTLOADER") == 0 || strcmp(token, "BOOT") == 0) {
-        cmd->type = CMD_BOOTLOADER;
     } else if (strcmp(token, "s") == 0) {
         // Legacy: Save preset 0
         cmd->type = CMD_SAVE;

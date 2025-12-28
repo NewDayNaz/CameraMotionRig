@@ -23,5 +23,6 @@ idf_component_register(
         esp_http_server
         json
         esp_netif
+        app_update
 )
 

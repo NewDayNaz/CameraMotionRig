@@ -10,6 +10,9 @@
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "cJSON.h"
+#include "esp_ota_ops.h"
+#include "esp_app_format.h"
+#include "esp_partition.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -112,6 +115,13 @@ static const char html_page[] =
 "<button class=\"btn-primary\" onclick=\"sendCommand('home')\">Home All Axes</button>"
 "<button class=\"btn-danger\" onclick=\"sendCommand('stop')\">Stop</button>"
 "<button class=\"btn-secondary\" onclick=\"sendCommand('precision')\">Toggle Precision</button>"
+"</div>"
+"<div class=\"section\">"
+"<h2>Firmware Update (OTA)</h2>"
+"<p style=\"color: #666; font-size: 14px;\">Upload a new firmware binary file to update the device over-the-air.</p>"
+"<input type=\"file\" id=\"firmware_file\" accept=\".bin\" style=\"margin: 10px 0; padding: 5px; width: 100%; max-width: 400px; border: 1px solid #ddd; border-radius: 4px;\">"
+"<button class=\"btn-warning\" onclick=\"uploadFirmware()\" style=\"margin-top: 10px;\">Upload Firmware</button>"
+"<div id=\"ota_status\" style=\"margin-top: 10px; padding: 10px; border-radius: 5px; display: none;\"></div>"
 "</div>"
 "<div class=\"section\">"
 "<h2>Presets</h2>"
@@ -511,6 +521,45 @@ static const char html_page[] =
 "    closePresetEditor();"
 "  }"
 "};"
+"function uploadFirmware() {"
+"  const fileInput = document.getElementById('firmware_file');"
+"  const statusDiv = document.getElementById('ota_status');"
+"  if (!fileInput.files || fileInput.files.length === 0) {"
+"    statusDiv.style.display = 'block';"
+"    statusDiv.className = 'status status-info';"
+"    statusDiv.textContent = 'Please select a firmware file first';"
+"    return;"
+"  }"
+"  const file = fileInput.files[0];"
+"  statusDiv.style.display = 'block';"
+"  statusDiv.className = 'status status-info';"
+"  statusDiv.textContent = 'Uploading firmware (' + (file.size / 1024 / 1024).toFixed(2) + ' MB)...';"
+"  const formData = new FormData();"
+"  formData.append('firmware', file);"
+"  fetch('/api/update', {"
+"    method: 'POST',"
+"    body: file"
+"  }).then(response => response.json()).then(data => {"
+"    if (data.status === 'ok') {"
+"      statusDiv.className = 'status status-success';"
+"      statusDiv.textContent = 'Firmware uploaded successfully! Device will reboot in a few seconds...';"
+"      setTimeout(() => {"
+"        statusDiv.textContent = 'Device rebooting. Please wait and refresh the page in 30 seconds.';"
+"      }, 2000);"
+"    } else {"
+"      statusDiv.className = 'status status-info';"
+"      statusDiv.style.background = '#ffebee';"
+"      statusDiv.style.color = '#c62828';"
+"      statusDiv.textContent = 'Error: ' + (data.error || 'Upload failed');"
+"    }"
+"  }).catch(e => {"
+"    console.error('Upload failed:', e);"
+"    statusDiv.className = 'status status-info';"
+"    statusDiv.style.background = '#ffebee';"
+"    statusDiv.style.color = '#c62828';"
+"    statusDiv.textContent = 'Upload failed: ' + e.message;"
+"  });"
+"}"
 "updatePositions();"
 "updatePosInterval = setInterval(updatePositions, 500);"
 "createPresetButtons();"
@@ -975,6 +1024,189 @@ static esp_err_t api_preset_update_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// Handler for /api/update - POST firmware update (OTA)
+static esp_err_t api_update_handler(httpd_req_t *req) {
+    esp_ota_handle_t ota_handle = 0;
+    const esp_partition_t *update_partition = NULL;
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    esp_ota_img_states_t ota_state;
+    
+    // Check if OTA is already in progress
+    if (esp_ota_get_state_partition(running, &ota_state) == ESP_OK) {
+        if (ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
+            ESP_LOGW(TAG, "OTA update pending verification");
+            cJSON *response = cJSON_CreateObject();
+            cJSON_AddStringToObject(response, "status", "error");
+            cJSON_AddStringToObject(response, "error", "OTA update pending verification. Please reboot.");
+            char *response_str = cJSON_Print(response);
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_send(req, response_str, strlen(response_str));
+            free(response_str);
+            cJSON_Delete(response);
+            return ESP_OK;
+        }
+    }
+    
+    // Find next OTA partition
+    update_partition = esp_ota_get_next_update_partition(NULL);
+    if (update_partition == NULL) {
+        ESP_LOGE(TAG, "No OTA partition found");
+        cJSON *response = cJSON_CreateObject();
+        cJSON_AddStringToObject(response, "status", "error");
+        cJSON_AddStringToObject(response, "error", "No OTA partition available");
+        char *response_str = cJSON_Print(response);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, response_str, strlen(response_str));
+        free(response_str);
+        cJSON_Delete(response);
+        return ESP_FAIL;
+    }
+    
+    ESP_LOGI(TAG, "Starting OTA update on partition: %s", update_partition->label);
+    
+    // Begin OTA update
+    esp_err_t err = esp_ota_begin(update_partition, OTA_SIZE_UNKNOWN, &ota_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(err));
+        cJSON *response = cJSON_CreateObject();
+        cJSON_AddStringToObject(response, "status", "error");
+        cJSON_AddStringToObject(response, "error", "Failed to begin OTA update");
+        char *response_str = cJSON_Print(response);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, response_str, strlen(response_str));
+        free(response_str);
+        cJSON_Delete(response);
+        return ESP_FAIL;
+    }
+    
+    // Receive firmware data
+    char *buf = malloc(1024);
+    if (buf == NULL) {
+        ESP_LOGE(TAG, "Failed to allocate buffer");
+        esp_ota_abort(ota_handle);
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    
+    int total_len = req->content_len;
+    int received = 0;
+    int content_received = 0;
+    bool content_length_known = (total_len > 0);
+    
+    ESP_LOGI(TAG, "Receiving firmware update%s", content_length_known ? 
+             " (size unknown, streaming)" : "");
+    if (content_length_known) {
+        ESP_LOGI(TAG, "Expected size: %d bytes", total_len);
+    }
+    
+    // Receive firmware data
+    // If content_len is 0, we'll receive until connection closes (chunked transfer)
+    while (!content_length_known || content_received < total_len) {
+        int recv_len = httpd_req_recv(req, buf, 1024);
+        if (recv_len < 0) {
+            if (recv_len == HTTPD_SOCK_ERR_TIMEOUT) {
+                continue;
+            }
+            // If we don't know the content length and recv_len is 0, we're done
+            if (!content_length_known && recv_len == 0) {
+                break;
+            }
+            ESP_LOGE(TAG, "OTA receive error: %d", recv_len);
+            free(buf);
+            esp_ota_abort(ota_handle);
+            httpd_resp_send_500(req);
+            return ESP_FAIL;
+        }
+        
+        if (recv_len == 0) {
+            // Connection closed, we're done
+            if (!content_length_known) {
+                break;
+            }
+            // If we expected more data, this is an error
+            if (content_received < total_len) {
+                ESP_LOGE(TAG, "OTA receive incomplete: %d / %d bytes", content_received, total_len);
+                free(buf);
+                esp_ota_abort(ota_handle);
+                httpd_resp_send_500(req);
+                return ESP_FAIL;
+            }
+            break;
+        }
+        
+        err = esp_ota_write(ota_handle, buf, recv_len);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "esp_ota_write failed: %s", esp_err_to_name(err));
+            free(buf);
+            esp_ota_abort(ota_handle);
+            httpd_resp_send_500(req);
+            return ESP_FAIL;
+        }
+        content_received += recv_len;
+        received += recv_len;
+        
+        // Log progress every 64KB
+        if (received % 65536 < 1024) {
+            if (content_length_known) {
+                ESP_LOGI(TAG, "OTA progress: %d / %d bytes (%.1f%%)", 
+                        received, total_len, (received * 100.0f) / total_len);
+            } else {
+                ESP_LOGI(TAG, "OTA progress: %d bytes received", received);
+            }
+        }
+    }
+    
+    ESP_LOGI(TAG, "OTA data reception complete: %d bytes", received);
+    
+    free(buf);
+    
+    // Finish OTA update
+    err = esp_ota_end(ota_handle);
+    if (err != ESP_OK) {
+        if (err == ESP_ERR_OTA_VALIDATE_FAILED) {
+            ESP_LOGE(TAG, "OTA validation failed");
+            cJSON *response = cJSON_CreateObject();
+            cJSON_AddStringToObject(response, "status", "error");
+            cJSON_AddStringToObject(response, "error", "Firmware validation failed");
+            char *response_str = cJSON_Print(response);
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_send(req, response_str, strlen(response_str));
+            free(response_str);
+            cJSON_Delete(response);
+            return ESP_FAIL;
+        } else {
+            ESP_LOGE(TAG, "esp_ota_end failed: %s", esp_err_to_name(err));
+            httpd_resp_send_500(req);
+            return ESP_FAIL;
+        }
+    }
+    
+    // Set boot partition
+    err = esp_ota_set_boot_partition(update_partition);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_set_boot_partition failed: %s", esp_err_to_name(err));
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    
+    ESP_LOGI(TAG, "OTA update completed successfully. Firmware will be active after reboot.");
+    
+    cJSON *response = cJSON_CreateObject();
+    cJSON_AddStringToObject(response, "status", "ok");
+    cJSON_AddStringToObject(response, "message", "OTA update completed. Device will reboot.");
+    char *response_str = cJSON_Print(response);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, response_str, strlen(response_str));
+    free(response_str);
+    cJSON_Delete(response);
+    
+    // Reboot after a short delay to allow response to be sent
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    esp_restart();
+    
+    return ESP_OK;
+}
+
 bool http_server_start(void) {
     // If server is already running, return success
     if (server_handle != NULL) {
@@ -1044,6 +1276,13 @@ bool http_server_start(void) {
             .handler = api_preset_update_handler,
         };
         httpd_register_uri_handler(server_handle, &preset_update_uri);
+        
+        httpd_uri_t update_uri = {
+            .uri = "/api/update",
+            .method = HTTP_POST,
+            .handler = api_update_handler,
+        };
+        httpd_register_uri_handler(server_handle, &update_uri);
         
         ESP_LOGI(TAG, "HTTP server started");
         return true;

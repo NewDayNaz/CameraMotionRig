@@ -32,7 +32,6 @@ typedef enum {
     CMD_STOP,       // STOP
     CMD_PRECISION,  // PRECISION <0|1>
     CMD_LIMITS,     // LIMITS <axis> <min> <max>
-    CMD_BOOTLOADER, // BOOTLOADER - Enter download mode on next reboot
     CMD_UNKNOWN
 } cmd_type_t;
 

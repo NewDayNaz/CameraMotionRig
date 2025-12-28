@@ -143,30 +143,6 @@ static void serial_task(void* pvParameters) {
                     usb_serial_send_status("OK");
                     break;
                     
-                case CMD_BOOTLOADER:
-                    // Enter download mode on next reboot
-                    // NOTE: This may not work if GPIO0 is connected to USB-to-serial chip
-                    // If this doesn't work, use manual method: connect GPIO0 to GND, then reset
-                    usb_serial_send_status("BOOTLOADER: Attempting to enter download mode...");
-                    vTaskDelay(pdMS_TO_TICKS(200));  // Give time for message to be sent
-                    
-                    // Try to set GPIO0 low via software (may not work if connected to USB chip)
-                    // GPIO0 must be LOW during reset to enter bootloader mode
-                    gpio_config_t io_conf = {
-                        .pin_bit_mask = (1ULL << GPIO_NUM_0),
-                        .mode = GPIO_MODE_OUTPUT,
-                        .pull_up_en = GPIO_PULLUP_DISABLE,
-                        .pull_down_en = GPIO_PULLDOWN_ENABLE,  // Enable pulldown to help keep it low
-                        .intr_type = GPIO_INTR_DISABLE
-                    };
-                    gpio_config(&io_conf);
-                    gpio_set_level(GPIO_NUM_0, 0);  // Set GPIO0 LOW
-                    vTaskDelay(pdMS_TO_TICKS(100));  // Delay to ensure GPIO0 is set low
-                    
-                    // Reboot - ESP32 will enter bootloader mode if GPIO0 stays LOW
-                    // If this doesn't work, manually connect GPIO0 to GND and reset
-                    esp_restart();
-                    break;
                     
                 case CMD_UNKNOWN:
                     usb_serial_send_status("ERROR: Unknown command");
