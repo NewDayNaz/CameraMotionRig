@@ -28,6 +28,10 @@ static bool steppers_enabled = true;  // Track enable state
 #define PRESET_GOTO_DEBOUNCE_MS 500  // 500ms debounce period
 static int64_t last_preset_goto_time = 0;  // Last preset goto time (microseconds)
 
+// Preset save debouncing: prevent rapid successive calls
+#define PRESET_SAVE_DEBOUNCE_MS 500  // 500ms debounce period
+static int64_t last_preset_save_time = 0;  // Last preset save time (microseconds)
+
 void motion_controller_init(void) {
     if (controller_initialized) {
         return;
@@ -215,8 +219,6 @@ bool motion_controller_goto_preset(uint8_t preset_index) {
     int64_t now = esp_timer_get_time();
     int64_t time_since_last_goto = now - last_preset_goto_time;
     if (time_since_last_goto < (PRESET_GOTO_DEBOUNCE_MS * 1000)) {
-        ESP_LOGW(TAG, "Preset goto debounced: %lld ms since last call (minimum %d ms)", 
-                 time_since_last_goto / 1000, PRESET_GOTO_DEBOUNCE_MS);
         return false;
     }
     last_preset_goto_time = now;
@@ -331,6 +333,14 @@ bool motion_controller_save_preset(uint8_t preset_index) {
     if (!controller_initialized) {
         return false;
     }
+    
+    // Debounce preset save calls - prevent rapid successive calls
+    int64_t now = esp_timer_get_time();
+    int64_t time_since_last_save = now - last_preset_save_time;
+    if (time_since_last_save < (PRESET_SAVE_DEBOUNCE_MS * 1000)) {
+        return false;
+    }
+    last_preset_save_time = now;
     
     preset_t preset;
     preset_init_default(&preset);
