@@ -637,15 +637,27 @@ while True:
                 
                 # Apply exponential smoothing to reduce jerkiness
                 # Pan/tilt: heavier smoothing for stability
-                joystick_yaw_smoothed = (JOYSTICK_SMOOTHING * joystick_yaw_curved + 
-                                        (1.0 - JOYSTICK_SMOOTHING) * joystick_yaw_smoothed)
-                joystick_pitch_smoothed = (JOYSTICK_SMOOTHING * joystick_pitch_curved + 
-                                          (1.0 - JOYSTICK_SMOOTHING) * joystick_pitch_smoothed)
+                # Reset smoothed values to zero when in deadzone to prevent drift
+                if abs(joystick_yaw_curved) < JOYSTICK_DEADZONE_YAW:
+                    joystick_yaw_smoothed = 0.0  # Reset to prevent drift
+                else:
+                    joystick_yaw_smoothed = (JOYSTICK_SMOOTHING * joystick_yaw_curved + 
+                                            (1.0 - JOYSTICK_SMOOTHING) * joystick_yaw_smoothed)
+                
+                if abs(joystick_pitch_curved) < JOYSTICK_DEADZONE_PITCH:
+                    joystick_pitch_smoothed = 0.0  # Reset to prevent drift
+                else:
+                    joystick_pitch_smoothed = (JOYSTICK_SMOOTHING * joystick_pitch_curved + 
+                                              (1.0 - JOYSTICK_SMOOTHING) * joystick_pitch_smoothed)
+                
                 # Zoom: light smoothing (0.6 = 60% new, 40% old) to prevent jitter while maintaining responsiveness
-                # This matches web UI smoothness behavior
+                # Reset smoothed values to zero when in deadzone to prevent drift
                 zoom_smoothing = 0.6  # Lighter smoothing for zoom to match web UI feel
-                joystick_zoom_smoothed = (zoom_smoothing * joystick_zoom_raw_scaled + 
-                                         (1.0 - zoom_smoothing) * joystick_zoom_smoothed)
+                if abs(joystick_zoom_raw_scaled) < JOYSTICK_DEADZONE_ZOOM:
+                    joystick_zoom_smoothed = 0.0  # Reset to prevent drift
+                else:
+                    joystick_zoom_smoothed = (zoom_smoothing * joystick_zoom_raw_scaled + 
+                                             (1.0 - zoom_smoothing) * joystick_zoom_smoothed)
                 
                 # Apply independent axis scaling for fine-tuning sensitivity
                 joystick_yaw_scaled = joystick_yaw_smoothed * JOYSTICK_SCALE_YAW
