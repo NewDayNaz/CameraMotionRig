@@ -97,18 +97,29 @@ def test_port(port_path):
     except Exception:
         return False
 
-def detect_esp32_port(force_rescan=False):
+def detect_esp32_port(force_rescan=False, timeout_seconds=15):
     """
     Automatically detect the ESP32 serial port by sending a STATUS command
     and checking for the expected response format.
     
     First checks cached port if available, then scans all ports if needed.
     Returns the port path if found, None otherwise.
+    
+    Args:
+        force_rescan: If True, skip cached port and rescan all ports
+        timeout_seconds: Maximum time to spend searching (default 15 seconds)
     """
+    start_time = time.time()
+    
     # Check cached port first (unless forced to rescan)
     if not force_rescan:
         cached_port = load_cached_port()
         if cached_port:
+            elapsed = time.time() - start_time
+            if elapsed >= timeout_seconds:
+                print(f"\nTimeout: Could not find ESP32 within {timeout_seconds} seconds")
+                return None
+                
             print(f"Trying cached port: {cached_port}...", end=" ")
             if test_port(cached_port):
                 print("✓ Cached port is valid!")
@@ -127,6 +138,12 @@ def detect_esp32_port(force_rescan=False):
     print(f"Scanning {len(ports)} serial port(s) for ESP32...")
     
     for port_info in ports:
+        # Check timeout before each port test
+        elapsed = time.time() - start_time
+        if elapsed >= timeout_seconds:
+            print(f"\nTimeout: Could not find ESP32 within {timeout_seconds} seconds")
+            return None
+        
         port_path = port_info.device
         print(f"  Trying {port_path}...", end=" ")
         
@@ -146,14 +163,22 @@ ARDUINO_PORT = None
 arduino = None
 
 if ARDUINO_ENABLE_SERIAL:
-    ARDUINO_PORT = detect_esp32_port()
+    print("Searching for ESP32 device (15 second timeout)...")
+    ARDUINO_PORT = detect_esp32_port(timeout_seconds=15)
     if ARDUINO_PORT:
         print(f"Connecting to ESP32 on {ARDUINO_PORT}...")
-        arduino = serial.Serial(ARDUINO_PORT, ARDUINO_BAUDRATE, timeout=0.1)
-        print("Connected!")
+        try:
+            arduino = serial.Serial(ARDUINO_PORT, ARDUINO_BAUDRATE, timeout=0.1)
+            print("Connected!")
+        except Exception as e:
+            print(f"ERROR: Failed to connect to {ARDUINO_PORT}: {e}")
+            print("Exiting...")
+            sys.exit(1)
     else:
-        print("WARNING: Could not detect ESP32. Serial communication disabled.")
-        ARDUINO_ENABLE_SERIAL = False
+        print("ERROR: Could not detect ESP32 within timeout period.")
+        print("Please ensure the ESP32 is connected and try again.")
+        print("Exiting...")
+        sys.exit(1)
 
 
 def send_cmd(cmd):
@@ -206,9 +231,10 @@ def reconnect_serial():
             pass
         arduino = None
     
-    # Clear cache and rescan
+    # Clear cache and rescan (with shorter timeout for reconnection)
     clear_cached_port()
-    ARDUINO_PORT = detect_esp32_port(force_rescan=True)
+    print("Attempting to reconnect to ESP32...")
+    ARDUINO_PORT = detect_esp32_port(force_rescan=True, timeout_seconds=10)
     
     if ARDUINO_PORT:
         try:
@@ -220,6 +246,7 @@ def reconnect_serial():
             ARDUINO_ENABLE_SERIAL = False
             return False
     else:
+        print("Could not reconnect to ESP32. Serial communication disabled.")
         ARDUINO_ENABLE_SERIAL = False
         return False
 
