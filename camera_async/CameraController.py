@@ -51,8 +51,8 @@ JOYSTICK_DEADZONE_ZOOM = 10    # ~1.5% of full range (32768) for zoom axis (smal
 # Allows fine-tuning sensitivity per axis
 # Lower values = less responsive, higher values = more responsive
 JOYSTICK_SCALE_YAW = 1.0    # Pan axis (full sensitivity)
-JOYSTICK_SCALE_PITCH = 0.8  # Tilt axis (reduced sensitivity for smoother control)
-JOYSTICK_SCALE_ZOOM = 2.0   # Zoom axis (increased sensitivity - triggers need more range)
+JOYSTICK_SCALE_PITCH = 0.9  # Tilt axis (reduced sensitivity for smoother control)
+JOYSTICK_SCALE_ZOOM = 1.0   # Zoom axis (increased sensitivity - triggers need more range)
 
 def apply_joystick_curve(value, max_value, deadzone):
     """
