@@ -615,16 +615,42 @@ while True:
                 joystick_zoom_smoothed = (JOYSTICK_SMOOTHING * joystick_zoom_curved + 
                                          (1.0 - JOYSTICK_SMOOTHING) * joystick_zoom_smoothed)
                 
+                # Detect when axes enter deadzone (transition from non-zero to zero)
+                # We need to send explicit zero commands to stop drift
+                yaw_in_deadzone = abs(joystick_yaw_smoothed) < 100
+                pitch_in_deadzone = abs(joystick_pitch_smoothed) < 100
+                zoom_in_deadzone = abs(joystick_zoom_smoothed) < 100
+                
+                yaw_entered_deadzone = not (abs(joystick_yaw_last) < 100) and yaw_in_deadzone
+                pitch_entered_deadzone = not (abs(joystick_pitch_last) < 100) and pitch_in_deadzone
+                zoom_entered_deadzone = not (abs(joystick_zoom_last) < 100) and zoom_in_deadzone
+                
                 # Rate limiting: only send if enough time has passed
                 current_time = time.time()
                 time_since_last_send = current_time - last_send_time
                 
-                # Check if values have changed significantly AND enough time has passed
-                if (time_since_last_send >= MIN_SEND_INTERVAL and
-                    (abs(joystick_yaw_smoothed - joystick_yaw_last) > JOYSTICK_SEND_THRESHOLD or
-                     abs(joystick_pitch_smoothed - joystick_pitch_last) > JOYSTICK_SEND_THRESHOLD or
-                     abs(joystick_zoom_smoothed - joystick_zoom_last) > JOYSTICK_SEND_THRESHOLD)):
-                    
+                # Send if:
+                # 1. Enough time has passed AND values changed significantly, OR
+                # 2. Any axis entered deadzone (need to send zero to stop drift)
+                should_send = False
+                if time_since_last_send >= MIN_SEND_INTERVAL:
+                    if (abs(joystick_yaw_smoothed - joystick_yaw_last) > JOYSTICK_SEND_THRESHOLD or
+                        abs(joystick_pitch_smoothed - joystick_pitch_last) > JOYSTICK_SEND_THRESHOLD or
+                        abs(joystick_zoom_smoothed - joystick_zoom_last) > JOYSTICK_SEND_THRESHOLD):
+                        should_send = True
+                
+                # Always send when entering deadzone to stop drift (bypass rate limiting)
+                if yaw_entered_deadzone or pitch_entered_deadzone or zoom_entered_deadzone:
+                    should_send = True
+                    # Force zero for axes that entered deadzone
+                    if yaw_entered_deadzone:
+                        joystick_yaw_smoothed = 0.0
+                    if pitch_entered_deadzone:
+                        joystick_pitch_smoothed = 0.0
+                    if zoom_entered_deadzone:
+                        joystick_zoom_smoothed = 0.0
+                
+                if should_send:
                     send_joystick_values(int(joystick_yaw_smoothed), 
                                          int(joystick_pitch_smoothed), 
                                          int(joystick_zoom_smoothed))
