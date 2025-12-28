@@ -14,9 +14,8 @@
 #include <stdbool.h>
 #include "board.h"
 
-// Segment duration in microseconds (4-8ms typical)
-// Shorter duration allows better fractional step accumulation for smooth low-speed motion
-#define SEGMENT_DURATION_US 4000  // 4ms default (reduced from 8ms for smoother low-speed control)
+// Segment duration in microseconds (5-10ms typical)
+#define SEGMENT_DURATION_US 8000  // 8ms default
 
 // Ring buffer size (must be power of 2 for efficient masking)
 #define SEGMENT_QUEUE_SIZE 32

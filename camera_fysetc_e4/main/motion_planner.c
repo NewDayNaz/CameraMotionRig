@@ -321,12 +321,13 @@ void motion_planner_update(motion_planner_t* planner, float dt) {
                 // Accumulate fractional steps for smooth low-speed motion
                 planner->fractional_step_accum[i] += steps_float;
                 
-                // Extract integer steps from accumulator
-                int32_t steps_int = (int32_t)truncf(planner->fractional_step_accum[i]);
+                // Extract integer steps from accumulator (use floor to handle negative values correctly)
+                int32_t steps_int = (int32_t)floorf(planner->fractional_step_accum[i]);
                 planner->fractional_step_accum[i] -= (float)steps_int;  // Keep only fractional part
                 
                 seg.steps[i] = steps_int;
-                planner->positions[i] += (float)steps_int;  // Update position with integer steps only
+                // Update position with full float value to maintain accuracy for soft limits
+                planner->positions[i] += steps_float;
             }
             
             if (!segment_queue_push(planner->queue, &seg)) {
