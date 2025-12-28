@@ -503,15 +503,15 @@ while True:
                 if joy_bumper_r != arduino_bumper_r_last:
                     arduino_bumper_r_last = joy_bumper_r
                     print("save position")
-                    # Save current position as preset (0-indexed, so subtract 1)
-                    preset_idx = arduino_selected_pos - 1
+                    # Save current position as preset
+                    preset_idx = arduino_selected_pos
                     send_cmd(f"SAVE {preset_idx}\n".encode('ascii'))
                     
                 if joy_bumper_l != arduino_bumper_l_last:
                     arduino_bumper_l_last = joy_bumper_l
                     print("goto saved position")
-                    # Move to preset (0-indexed, so subtract 1)
-                    preset_idx = arduino_selected_pos - 1
+                    # Move to preset
+                    preset_idx = arduino_selected_pos
                     send_cmd(f"GOTO {preset_idx}\n".encode('ascii'))
 
                 # Speed control is now handled by Arduino based on joystick values
