@@ -1,8 +1,10 @@
 import time
 import sys
+import os
 import threading
 from inputs import get_gamepad
 import serial
+import serial.tools.list_ports
 
 # Joystick values (normalized -1.0 to 1.0, will be converted to -32768 to 32768 for Arduino)
 joystick_yaw = 0.0      # X-axis (pan)
@@ -24,38 +26,202 @@ arduino_selected_pos = 1
 
 ARDUINO_ENABLE_SERIAL = True
 
-ARDUINO_PORT = "/dev/ttyACM0"  # ESP32 USB serial port (may be /dev/ttyUSB0 on some systems)
 ARDUINO_BAUDRATE = 115200
 
+# Cache file to store the detected port
+PORT_CACHE_FILE = os.path.join(os.path.dirname(__file__), ".esp32_port_cache")
+
+def load_cached_port():
+    """Load the cached port from file if it exists."""
+    if os.path.exists(PORT_CACHE_FILE):
+        try:
+            with open(PORT_CACHE_FILE, 'r') as f:
+                cached_port = f.read().strip()
+                if cached_port:
+                    return cached_port
+        except Exception as e:
+            print(f"Warning: Could not read port cache: {e}")
+    return None
+
+def save_cached_port(port):
+    """Save the detected port to cache file."""
+    try:
+        with open(PORT_CACHE_FILE, 'w') as f:
+            f.write(port)
+    except Exception as e:
+        print(f"Warning: Could not save port cache: {e}")
+
+def clear_cached_port():
+    """Clear the cached port."""
+    try:
+        if os.path.exists(PORT_CACHE_FILE):
+            os.remove(PORT_CACHE_FILE)
+    except Exception as e:
+        print(f"Warning: Could not clear port cache: {e}")
+
+def test_port(port_path):
+    """
+    Test if a specific port responds to STATUS command.
+    Returns True if port is valid ESP32, False otherwise.
+    """
+    try:
+        test_serial = serial.Serial(port_path, ARDUINO_BAUDRATE, timeout=0.5)
+        time.sleep(0.1)  # Give port time to initialize
+        
+        # Clear any existing data in buffer
+        test_serial.reset_input_buffer()
+        
+        # Send STATUS command (read-only, doesn't change anything)
+        test_serial.write(b"STATUS\n")
+        test_serial.flush()
+        
+        # Wait for response (up to 1 second)
+        response = b""
+        start_time = time.time()
+        while time.time() - start_time < 1.0:
+            if test_serial.in_waiting > 0:
+                response += test_serial.read(test_serial.in_waiting)
+                # Check if we have a complete line
+                if b'\n' in response:
+                    break
+            time.sleep(0.01)
+        
+        test_serial.close()
+        
+        # Check if response matches expected format: STATUS:PAN:... TILT:... ZOOM:...
+        response_str = response.decode('ascii', errors='ignore').strip()
+        if response_str.startswith("STATUS:PAN:") and "TILT:" in response_str and "ZOOM:" in response_str:
+            return True
+        return False
+        
+    except Exception:
+        return False
+
+def detect_esp32_port(force_rescan=False):
+    """
+    Automatically detect the ESP32 serial port by sending a STATUS command
+    and checking for the expected response format.
+    
+    First checks cached port if available, then scans all ports if needed.
+    Returns the port path if found, None otherwise.
+    """
+    # Check cached port first (unless forced to rescan)
+    if not force_rescan:
+        cached_port = load_cached_port()
+        if cached_port:
+            print(f"Trying cached port: {cached_port}...", end=" ")
+            if test_port(cached_port):
+                print("✓ Cached port is valid!")
+                return cached_port
+            else:
+                print("✗ Cached port failed, clearing cache and rescanning...")
+                clear_cached_port()
+    
+    # Get list of available serial ports
+    ports = serial.tools.list_ports.comports()
+    
+    if not ports:
+        print("No serial ports found")
+        return None
+    
+    print(f"Scanning {len(ports)} serial port(s) for ESP32...")
+    
+    for port_info in ports:
+        port_path = port_info.device
+        print(f"  Trying {port_path}...", end=" ")
+        
+        if test_port(port_path):
+            print(f"✓ Found ESP32!")
+            # Save to cache for next time
+            save_cached_port(port_path)
+            return port_path
+        else:
+            print(f"✗")
+    
+    print("ESP32 not found on any serial port")
+    return None
+
+# Auto-detect ESP32 port
+ARDUINO_PORT = None
 arduino = None
+
 if ARDUINO_ENABLE_SERIAL:
-    arduino = serial.Serial(ARDUINO_PORT, ARDUINO_BAUDRATE, timeout=0.1)  # Add timeout for non-blocking reads
+    ARDUINO_PORT = detect_esp32_port()
+    if ARDUINO_PORT:
+        print(f"Connecting to ESP32 on {ARDUINO_PORT}...")
+        arduino = serial.Serial(ARDUINO_PORT, ARDUINO_BAUDRATE, timeout=0.1)
+        print("Connected!")
+    else:
+        print("WARNING: Could not detect ESP32. Serial communication disabled.")
+        ARDUINO_ENABLE_SERIAL = False
 
 
 def send_cmd(cmd):
     """Send command to ESP32. Commands should end with newline."""
-    if ARDUINO_ENABLE_SERIAL:
-        # Ensure command ends with newline for proper parsing
-        if not cmd.endswith(b'\n'):
-            cmd = cmd + b'\n'
-        arduino.write(cmd)
+    if ARDUINO_ENABLE_SERIAL and arduino is not None:
+        try:
+            # Ensure command ends with newline for proper parsing
+            if not cmd.endswith(b'\n'):
+                cmd = cmd + b'\n'
+            arduino.write(cmd)
+        except (serial.SerialException, AttributeError) as e:
+            print(f"[Serial] Error sending command: {e}")
+            # Attempt to reconnect
+            reconnect_serial()
 
 def send_joystick_values(yaw, pitch, zoom):
     """Send joystick values to ESP32 in format: j,yaw,pitch,zoom
     Values should be integers from -32768 to 32768
     ESP32 will scale these to appropriate velocity ranges"""
-    if ARDUINO_ENABLE_SERIAL:
-        # Format: j,yaw,pitch,zoom\n (newline required for command parsing)
-        cmd = f"j,{int(yaw)},{int(pitch)},{int(zoom)}\n".encode('ascii')
-        arduino.write(cmd)
+    if ARDUINO_ENABLE_SERIAL and arduino is not None:
+        try:
+            # Format: j,yaw,pitch,zoom\n (newline required for command parsing)
+            cmd = f"j,{int(yaw)},{int(pitch)},{int(zoom)}\n".encode('ascii')
+            arduino.write(cmd)
+        except (serial.SerialException, AttributeError) as e:
+            print(f"[Serial] Error sending joystick values: {e}")
+            # Attempt to reconnect
+            reconnect_serial()
 
 
 def tell_cmd(msg):
-    if ARDUINO_ENABLE_SERIAL:
-        msg = msg
-        x = msg.encode("ascii")  # encode n send
-        arduino.write(x)
+    if ARDUINO_ENABLE_SERIAL and arduino is not None:
+        try:
+            x = msg.encode("ascii")  # encode n send
+            arduino.write(x)
+        except (serial.SerialException, AttributeError) as e:
+            print(f"[Serial] Error sending message: {e}")
+            # Attempt to reconnect
+            reconnect_serial()
 
+
+def reconnect_serial():
+    """Attempt to reconnect to ESP32, clearing cache if needed."""
+    global arduino, ARDUINO_PORT, ARDUINO_ENABLE_SERIAL
+    
+    if arduino is not None:
+        try:
+            arduino.close()
+        except:
+            pass
+        arduino = None
+    
+    # Clear cache and rescan
+    clear_cached_port()
+    ARDUINO_PORT = detect_esp32_port(force_rescan=True)
+    
+    if ARDUINO_PORT:
+        try:
+            arduino = serial.Serial(ARDUINO_PORT, ARDUINO_BAUDRATE, timeout=0.1)
+            print(f"Reconnected to ESP32 on {ARDUINO_PORT}")
+            return True
+        except Exception as e:
+            print(f"Failed to reconnect: {e}")
+            ARDUINO_ENABLE_SERIAL = False
+            return False
+    else:
+        ARDUINO_ENABLE_SERIAL = False
+        return False
 
 def serial_read_thread():
     """Thread function to continuously read and display messages from ESP32"""
@@ -63,6 +229,9 @@ def serial_read_thread():
         return
     
     buffer = ""
+    consecutive_errors = 0
+    max_errors = 3
+    
     while True:
         try:
             if arduino.in_waiting > 0:
@@ -76,27 +245,44 @@ def serial_read_thread():
                     line = line.strip()
                     if line:  # Only print non-empty lines
                         print(f"[ESP32] {line}")
+                
+                # Reset error counter on successful read
+                consecutive_errors = 0
             else:
                 # Small sleep to prevent CPU spinning when no data
                 time.sleep(0.01)
         except serial.SerialException as e:
+            consecutive_errors += 1
             print(f"[Serial Error] {e}")
+            if consecutive_errors >= max_errors:
+                print("[Serial] Multiple errors detected, attempting to reconnect...")
+                if reconnect_serial():
+                    consecutive_errors = 0
+                else:
+                    print("[Serial] Reconnection failed. Serial communication disabled.")
+                    break
             time.sleep(1)  # Wait before retrying
         except Exception as e:
+            consecutive_errors += 1
             print(f"[Error reading serial] {e}")
+            if consecutive_errors >= max_errors:
+                print("[Serial] Multiple errors detected, attempting to reconnect...")
+                if reconnect_serial():
+                    consecutive_errors = 0
+                else:
+                    print("[Serial] Reconnection failed. Serial communication disabled.")
+                    break
             time.sleep(1)
         except KeyboardInterrupt:
             break
 
 
-if ARDUINO_ENABLE_SERIAL:
-    print("Waiting for serial connection...")
-    time.sleep(10)
-    print("Connected! Sending joystick values to Arduino...")
-    # Start serial read thread to receive debug messages from Arduino
+if ARDUINO_ENABLE_SERIAL and arduino is not None:
+    # Start serial read thread to receive debug messages from ESP32
     serial_thread = threading.Thread(target=serial_read_thread, daemon=True)
     serial_thread.start()
-    print("Serial read thread started - Arduino debug messages will be displayed")
+    print("Serial read thread started - ESP32 debug messages will be displayed")
+    print("Ready! Sending joystick values to ESP32...")
 
 JOY_MAX_VALUE = 32768
 JOY_DEADZONE = JOY_MAX_VALUE * 0.06  # deadzone after 9% of max is reached
