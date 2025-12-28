@@ -136,7 +136,7 @@ if [ "$FLASH_MODE" = "OTA" ]; then
     echo "Response: $BODY"
     echo ""
     
-    if [ "$HTTP_CODE" = "200" ] && echo "$BODY" | grep -q '"status":"ok"'; then
+    if [ "$HTTP_CODE" = "200" ] && echo "$BODY" | grep -qE '"status"\s*:\s*"ok"'; then
         echo "OTA update successful! Device will reboot automatically."
         echo "Wait 30 seconds and check the device."
     else
