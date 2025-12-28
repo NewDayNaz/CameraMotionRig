@@ -17,12 +17,12 @@
 // Maximum velocity (steps per second) - for manual/joystick control
 #define MAX_VELOCITY_PAN  2000.0f
 #define MAX_VELOCITY_TILT 2000.0f
-#define MAX_VELOCITY_ZOOM 1500.0f
+#define MAX_VELOCITY_ZOOM 200.0f   // Reduced significantly for slower zoom control
 
 // Maximum acceleration (steps per second squared) - for manual/joystick control
 #define MAX_ACCEL_PAN  1000.0f
 #define MAX_ACCEL_TILT 1000.0f
-#define MAX_ACCEL_ZOOM 800.0f
+#define MAX_ACCEL_ZOOM 100.0f      // Reduced proportionally for zoom
 
 // Preset move limits (very conservative for cinematic moves)
 // Quintic curves can have high peak velocities (1.5-2x average), so use very low limits
@@ -30,11 +30,11 @@
 // With 16x microstepping: 200 steps/sec = 3,200 microsteps/sec (very safe for cinematic moves)
 #define PRESET_MAX_VELOCITY_PAN   200.0f   // 10% of manual max
 #define PRESET_MAX_VELOCITY_TILT  200.0f   // 10% of manual max
-#define PRESET_MAX_VELOCITY_ZOOM  150.0f   // 10% of manual max
+#define PRESET_MAX_VELOCITY_ZOOM  20.0f    // 10% of manual max (slower for zoom)
 
 #define PRESET_MAX_ACCEL_PAN    100.0f     // 10% of manual max
 #define PRESET_MAX_ACCEL_TILT   100.0f     // 10% of manual max
-#define PRESET_MAX_ACCEL_ZOOM    80.0f     // 10% of manual max
+#define PRESET_MAX_ACCEL_ZOOM    10.0f     // 10% of manual max (slower for zoom)
 
 // Soft limit zones (percentage of travel)
 #define SOFT_LIMIT_ZONE 0.05f  // Last 5% of travel

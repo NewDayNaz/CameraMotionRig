@@ -14,6 +14,9 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "nvs_flash.h"
+#include "esp_system.h"
+#include "esp_rom_sys.h"
+#include "driver/gpio.h"
 
 #include "board.h"
 #include "motion_controller.h"
@@ -70,7 +73,7 @@ static void serial_task(void* pvParameters) {
                     const float JOYSTICK_MAX = 32768.0f;
                     const float MAX_VEL_PAN = 2000.0f;
                     const float MAX_VEL_TILT = 2000.0f;
-                    const float MAX_VEL_ZOOM = 1500.0f;
+                    const float MAX_VEL_ZOOM = 200.0f;   // Reduced significantly for slower zoom control
                     
                     // Scale yaw (pan) from -32768..32768 to -MAX_VEL_PAN..MAX_VEL_PAN
                     scaled_velocities[0] = (cmd.velocities[0] / JOYSTICK_MAX) * MAX_VEL_PAN;
@@ -138,6 +141,31 @@ static void serial_task(void* pvParameters) {
                     // Set soft limits
                     motion_controller_set_limits(cmd.limits_axis, cmd.limits_min, cmd.limits_max);
                     usb_serial_send_status("OK");
+                    break;
+                    
+                case CMD_BOOTLOADER:
+                    // Enter download mode on next reboot
+                    // NOTE: This may not work if GPIO0 is connected to USB-to-serial chip
+                    // If this doesn't work, use manual method: connect GPIO0 to GND, then reset
+                    usb_serial_send_status("BOOTLOADER: Attempting to enter download mode...");
+                    vTaskDelay(pdMS_TO_TICKS(200));  // Give time for message to be sent
+                    
+                    // Try to set GPIO0 low via software (may not work if connected to USB chip)
+                    // GPIO0 must be LOW during reset to enter bootloader mode
+                    gpio_config_t io_conf = {
+                        .pin_bit_mask = (1ULL << GPIO_NUM_0),
+                        .mode = GPIO_MODE_OUTPUT,
+                        .pull_up_en = GPIO_PULLUP_DISABLE,
+                        .pull_down_en = GPIO_PULLDOWN_ENABLE,  // Enable pulldown to help keep it low
+                        .intr_type = GPIO_INTR_DISABLE
+                    };
+                    gpio_config(&io_conf);
+                    gpio_set_level(GPIO_NUM_0, 0);  // Set GPIO0 LOW
+                    vTaskDelay(pdMS_TO_TICKS(100));  // Delay to ensure GPIO0 is set low
+                    
+                    // Reboot - ESP32 will enter bootloader mode if GPIO0 stays LOW
+                    // If this doesn't work, manually connect GPIO0 to GND and reset
+                    esp_restart();
                     break;
                     
                 case CMD_UNKNOWN:
@@ -212,13 +240,15 @@ void app_main(void) {
     
     ESP_LOGI(TAG, "Tasks started, system ready");
     
-    // Main task can do other things or just wait
+    // Main task - reduced logging to avoid serial interference
+    // Position can be queried via POS command or web interface
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
-        // Periodic status logging
-        float pos[3];
-        motion_controller_get_positions(pos);
-        ESP_LOGI(TAG, "Pos: PAN=%.1f TILT=%.1f ZOOM=%.1f", pos[0], pos[1], pos[2]);
+        vTaskDelay(pdMS_TO_TICKS(10000));  // Reduced logging frequency: every 10 seconds
+        // Periodic status logging (much less frequent)
+        // Commented out entirely - use POS command or web interface for position info
+        // float pos[3];
+        // motion_controller_get_positions(pos);
+        // ESP_LOGI(TAG, "Pos: PAN=%.1f TILT=%.1f ZOOM=%.1f", pos[0], pos[1], pos[2]);
     }
 }
 

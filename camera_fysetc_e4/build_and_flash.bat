@@ -3,7 +3,7 @@ REM Build and flash script for FYSETC E4 firmware (Windows)
 REM Usage: build_and_flash.bat [COM_PORT]
 REM Example: build_and_flash.bat COM3
 
-setlocal
+setlocal enabledelayedexpansion
 
 REM Get COM port from command line argument, or prompt
 if "%1"=="" (
@@ -54,16 +54,30 @@ REM idf.py -p %COM_PORT% erase-flash
 
 echo.
 echo Step 3: Flashing firmware to %COM_PORT%...
-idf.py -p %COM_PORT% flash
-if errorlevel 1 (
-    echo Flash failed!
-    echo Make sure:
-    echo   - Board is connected to %COM_PORT%
-    echo   - USB cable supports data transfer
-    echo   - Hold BOOT button, press RESET, release RESET, release BOOT if needed
-    pause
-    exit /b 1
-)
+echo.
+echo ========================================
+echo MANUAL BOOTLOADER MODE REQUIRED
+echo ========================================
+echo FYSETC E4 board doesn't have a BOOT button.
+echo To enter bootloader mode:
+echo.
+echo METHOD 1 - GPIO0 to GND (Recommended):
+echo   1. Connect GPIO0 pin to GND using a jumper wire
+echo   2. Press and release the RESET button (or power cycle)
+echo   3. Keep GPIO0 connected to GND for 1 second
+echo   4. Remove the GPIO0 to GND connection
+echo   5. Wait 1 second
+echo.
+echo METHOD 2 - Try automatic reset (if USB supports DTR/RTS):
+echo   Just press RESET button right before flashing
+echo   (esptool may be able to auto-enter bootloader mode)
+echo.
+echo Then press any key here to continue with flashing...
+pause >nul
+echo.
+echo Using baud rate 115200 for more reliable flashing
+timeout /t 1 /nobreak >nul
+idf.py -p %COM_PORT% flash -b 115200
 
 echo.
 echo Step 4: Starting serial monitor...
