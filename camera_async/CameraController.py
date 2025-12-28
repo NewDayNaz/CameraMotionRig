@@ -4,47 +4,50 @@ import threading
 from inputs import get_gamepad
 import serial
 
-ARDUINO_PITCH_MAX_SPEED = 10000 * 1.3
-ARDUINO_YAW_MAX_SPEED = 1800 * 4.8
+# Joystick values (normalized -1.0 to 1.0, will be converted to -32768 to 32768 for Arduino)
+joystick_yaw = 0.0      # X-axis (pan)
+joystick_pitch = 0.0    # Y-axis (tilt) 
+joystick_zoom = 0.0     # Combined trigger value (negative = zoom out, positive = zoom in)
 
-ARDUINO_PITCH_HALF_SPEED = ARDUINO_PITCH_MAX_SPEED * 3
-ARDUINO_YAW_HALF_SPEED = ARDUINO_YAW_MAX_SPEED * 3
+joystick_yaw_last = 0.0
+joystick_pitch_last = 0.0
+joystick_zoom_last = 0.0
 
-ARDUINO_PITCH_SPEED = 0
-ARDUINO_YAW_SPEED = 0
-ARDUINO_PITCH_SPEED_LAST = 0
-ARDUINO_YAW_SPEED_LAST = 0
+JOYSTICK_MAX_INT = 32768  # Maximum integer value for Arduino
 
-ARDUINO_PITCH_LAST = 0
-ARDUINO_YAW_LAST = 0
-ARDUINO_ZOOM_LAST = 0
+arduino_back_last = 0
+arduino_start_last = 0
+arduino_bumper_l_last = 0
+arduino_bumper_r_last = 0
 
-ARDUINO_BACK_LAST = 0
-ARDUINO_START_LAST = 0
-ARDUINO_BUMPER_L_LAST = 0
-ARDUINO_BUMPER_R_LAST = 0
-
-ARDUINO_SELECTED_POS = 1
+arduino_selected_pos = 1
 
 ARDUINO_ENABLE_SERIAL = True
 
-ARDUINO_PORT = "/dev/ttyACM0"  # put your port here
+ARDUINO_PORT = "/dev/ttyACM0"  # ESP32 USB serial port (may be /dev/ttyUSB0 on some systems)
 ARDUINO_BAUDRATE = 115200
 
-ARDUINO_ZOOM_PORT = "/dev/ttyACM1"  # put your port here
-
 arduino = None
-arduino_zoom = None
 if ARDUINO_ENABLE_SERIAL:
-    arduino = serial.Serial(ARDUINO_PORT, ARDUINO_BAUDRATE)
-    arduino_zoom = serial.Serial(ARDUINO_ZOOM_PORT, ARDUINO_BAUDRATE)
-    # arduino_zoom = arduino
+    arduino = serial.Serial(ARDUINO_PORT, ARDUINO_BAUDRATE, timeout=0.1)  # Add timeout for non-blocking reads
 
 
 def send_cmd(cmd):
+    """Send command to ESP32. Commands should end with newline."""
     if ARDUINO_ENABLE_SERIAL:
-        arduino.write(cmd + b" ")
-        arduino_zoom.write(cmd + b" ")
+        # Ensure command ends with newline for proper parsing
+        if not cmd.endswith(b'\n'):
+            cmd = cmd + b'\n'
+        arduino.write(cmd)
+
+def send_joystick_values(yaw, pitch, zoom):
+    """Send joystick values to ESP32 in format: j,yaw,pitch,zoom
+    Values should be integers from -32768 to 32768
+    ESP32 will scale these to appropriate velocity ranges"""
+    if ARDUINO_ENABLE_SERIAL:
+        # Format: j,yaw,pitch,zoom\n (newline required for command parsing)
+        cmd = f"j,{int(yaw)},{int(pitch)},{int(zoom)}\n".encode('ascii')
+        arduino.write(cmd)
 
 
 def tell_cmd(msg):
@@ -52,68 +55,94 @@ def tell_cmd(msg):
         msg = msg
         x = msg.encode("ascii")  # encode n send
         arduino.write(x)
-        arduino_zoom.write(x)
+
+
+def serial_read_thread():
+    """Thread function to continuously read and display messages from ESP32"""
+    if not ARDUINO_ENABLE_SERIAL or arduino is None:
+        return
+    
+    buffer = ""
+    while True:
+        try:
+            if arduino.in_waiting > 0:
+                # Read available data
+                data = arduino.read(arduino.in_waiting).decode('ascii', errors='ignore')
+                buffer += data
+                
+                # Process complete lines (ending with \n)
+                while '\n' in buffer:
+                    line, buffer = buffer.split('\n', 1)
+                    line = line.strip()
+                    if line:  # Only print non-empty lines
+                        print(f"[ESP32] {line}")
+            else:
+                # Small sleep to prevent CPU spinning when no data
+                time.sleep(0.01)
+        except serial.SerialException as e:
+            print(f"[Serial Error] {e}")
+            time.sleep(1)  # Wait before retrying
+        except Exception as e:
+            print(f"[Error reading serial] {e}")
+            time.sleep(1)
+        except KeyboardInterrupt:
+            break
 
 
 if ARDUINO_ENABLE_SERIAL:
     print("Waiting for serial connection...")
     time.sleep(10)
-    send_cmd(b"0")
-    time.sleep(0.1)
-
-    pitch_speed = str(ARDUINO_PITCH_MAX_SPEED).encode()
-    yaw_speed = str(ARDUINO_YAW_MAX_SPEED).encode()
-
-    send_cmd(b"p")  # set pitch step speed (higher is slower)
-    send_cmd(pitch_speed)
-    send_cmd(b"y")  # set yaw step speed
-    send_cmd(yaw_speed)
+    print("Connected! Sending joystick values to Arduino...")
+    # Start serial read thread to receive debug messages from Arduino
+    serial_thread = threading.Thread(target=serial_read_thread, daemon=True)
+    serial_thread.start()
+    print("Serial read thread started - Arduino debug messages will be displayed")
 
 JOY_MAX_VALUE = 32768
 JOY_DEADZONE = JOY_MAX_VALUE * 0.06  # deadzone after 9% of max is reached
 JOY_UPPER_RAMP = JOY_MAX_VALUE * 0.98  # jump to max after 95% of max is reached
 
-JOY_X_LEFT = False
-JOY_X_RIGHT = False
-JOY_Y_FORWARD = False
-JOY_Y_BACKWARD = False
+joy_x_left = False
+joy_x_right = False
+joy_y_forward = False
+joy_y_backward = False
 
-JOY_RX_LEFT = False
-JOY_RX_RIGHT = False
-JOY_RY_FORWARD = False
-JOY_RY_BACKWARD = False
+joy_rx_left = False
+joy_rx_right = False
+joy_ry_forward = False
+joy_ry_backward = False
 
-JOY_X = 0
-JOY_Y = 0
-JOY_RX = 0
-JOY_RY = 0
+joy_x = 0
+joy_y = 0
+joy_rx = 0
+joy_ry = 0
 
-JOY_DP_U = 0
-JOY_DP_D = 0
-JOY_DP_L = 0
-JOY_DP_R = 0
+joy_dp_u = 0
+joy_dp_d = 0
+joy_dp_l = 0
+joy_dp_r = 0
 
-JOY_BACK = 0
-JOY_START = 0
+joy_back = 0
+joy_start = 0
 
-JOY_BUMPER_L = 0
-JOY_BUMPER_R = 0
+joy_bumper_l = 0
+joy_bumper_r = 0
 
-JOY_TRIGGER_L = 0
-JOY_TRIGGER_R = 0
+joy_trigger_l = 0
+joy_trigger_r = 0
 
 
 def thread_function(name):
-    LAST_CMD = ""
-    CUR_CMD = ""
+    last_cmd = ""
+    cur_cmd = ""
 
     while True:
         with open("/home/pi/camera_async/send_cmd.txt", "r") as f:
-            CUR_CMD = f.read().strip()
-            if CUR_CMD != LAST_CMD and CUR_CMD != "":
-                LAST_CMD = CUR_CMD
-                print("send", CUR_CMD)
-                send_cmd(bytes(CUR_CMD, "ascii"))
+            cur_cmd = f.read().strip()
+            if cur_cmd != last_cmd and cur_cmd != "":
+                last_cmd = cur_cmd
+                print("send", cur_cmd)
+                send_cmd(bytes(cur_cmd, "ascii"))
         time.sleep(0.05)
 
 
@@ -128,245 +157,164 @@ while True:
             print(event.ev_type, event.code, event.state)
             if event.ev_type == "Key":
                 if event.code == "BTN_TL":
-                    JOY_BUMPER_L = event.state
+                    joy_bumper_l = event.state
                 if event.code == "BTN_TR":
-                    JOY_BUMPER_R = event.state
+                    joy_bumper_r = event.state
                 if event.code == "BTN_SELECT":
-                    JOY_BACK = event.state
+                    joy_back = event.state
                 if event.code == "BTN_START":
-                    JOY_START = event.state
+                    joy_start = event.state
                 if event.code == "BTN_SOUTH":
-                    ARDUINO_SELECTED_POS = 1
+                    arduino_selected_pos = 1
                 if event.code == "BTN_EAST":
-                    ARDUINO_SELECTED_POS = 2
+                    arduino_selected_pos = 2
                 if event.code == "BTN_NORTH":
-                    ARDUINO_SELECTED_POS = 3
+                    arduino_selected_pos = 3
                 if event.code == "BTN_WEST":
-                    ARDUINO_SELECTED_POS = 4
+                    arduino_selected_pos = 4
 
-                if JOY_BACK != ARDUINO_BACK_LAST:
-                    ARDUINO_BACK_LAST = JOY_BACK
-                    send_cmd(b"ea")
+                if joy_back != arduino_back_last:
+                    arduino_back_last = joy_back
+                    # Home all axes
+                    send_cmd(b"HOME\n")
 
-                if JOY_START != ARDUINO_START_LAST:
-                    ARDUINO_START_LAST = JOY_START
-                    send_cmd(b"eb")
+                if joy_start != arduino_start_last:
+                    arduino_start_last = joy_start
+                    # Stop all motion
+                    send_cmd(b"STOP\n")
 
-                if JOY_BUMPER_R != ARDUINO_BUMPER_R_LAST:
-                    ARDUINO_BUMPER_R_LAST = JOY_BUMPER_R
+                if joy_bumper_r != arduino_bumper_r_last:
+                    arduino_bumper_r_last = joy_bumper_r
                     print("save position")
-                    if ARDUINO_SELECTED_POS == 1:
-                        send_cmd(b"s")
-                    if ARDUINO_SELECTED_POS == 2:
-                        send_cmd(b"s2")
-                    if ARDUINO_SELECTED_POS == 3:
-                        send_cmd(b"s3")
-                    if ARDUINO_SELECTED_POS == 4:
-                        send_cmd(b"s4")
-                if JOY_BUMPER_L != ARDUINO_BUMPER_L_LAST:
-                    ARDUINO_BUMPER_L_LAST = JOY_BUMPER_L
+                    # Save current position as preset (0-indexed, so subtract 1)
+                    preset_idx = arduino_selected_pos - 1
+                    send_cmd(f"SAVE {preset_idx}\n".encode('ascii'))
+                    
+                if joy_bumper_l != arduino_bumper_l_last:
+                    arduino_bumper_l_last = joy_bumper_l
                     print("goto saved position")
-                    if ARDUINO_SELECTED_POS == 1:
-                        send_cmd(b"t")
-                    if ARDUINO_SELECTED_POS == 2:
-                        send_cmd(b"t2")
-                    if ARDUINO_SELECTED_POS == 3:
-                        send_cmd(b"t3")
-                    if ARDUINO_SELECTED_POS == 4:
-                        send_cmd(b"t4")
+                    # Move to preset (0-indexed, so subtract 1)
+                    preset_idx = arduino_selected_pos - 1
+                    send_cmd(f"GOTO {preset_idx}\n".encode('ascii'))
 
-                if ARDUINO_PITCH_SPEED != ARDUINO_PITCH_SPEED_LAST:
-                    ARDUINO_PITCH_SPEED_LAST = ARDUINO_PITCH_SPEED
-                    send_cmd(b"p")  # set pitch step speed (higher is slower)
-                    send_cmd(str(ARDUINO_PITCH_SPEED).encode())
-
-                if ARDUINO_YAW_SPEED != ARDUINO_YAW_SPEED_LAST:
-                    ARDUINO_YAW_SPEED_LAST = ARDUINO_YAW_SPEED
-                    send_cmd(b"y")  # set yaw step speed
-                    send_cmd(str(ARDUINO_YAW_SPEED).encode())
+                # Speed control is now handled by Arduino based on joystick values
 
             if event.ev_type == "Absolute":
                 if event.code == "ABS_HAT0Y":
                     if event.state == -1:
-                        JOY_DP_U = 1
+                        joy_dp_u = 1
                     if event.state == 0:
-                        JOY_DP_U = 0
-                        JOY_DP_D = 0
+                        joy_dp_u = 0
+                        joy_dp_d = 0
                     if event.state == 1:
-                        JOY_DP_D = 1
+                        joy_dp_d = 1
                 if event.code == "ABS_HAT0X":
                     if event.state == -1:
-                        JOY_DP_L = 1
+                        joy_dp_l = 1
                     if event.state == 0:
-                        JOY_DP_L = 0
-                        JOY_DP_R = 0
+                        joy_dp_l = 0
+                        joy_dp_r = 0
                     if event.state == 1:
-                        JOY_DP_R = 1
+                        joy_dp_r = 1
                 if event.code == "ABS_Z":
                     if event.state < 100:
-                        JOY_TRIGGER_L = 0
+                        joy_trigger_l = 0
                     elif event.state >= 100:
-                        JOY_TRIGGER_L = event.state / 255
+                        joy_trigger_l = event.state / 255
                 if event.code == "ABS_RZ":
                     if event.state < 100:
-                        JOY_TRIGGER_R = 0
+                        joy_trigger_r = 0
                     elif event.state >= 100:
-                        JOY_TRIGGER_R = event.state / 255
+                        joy_trigger_r = event.state / 255
                 if event.code == "ABS_X":
                     if event.state < JOY_DEADZONE and event.state > -JOY_DEADZONE:
-                        JOY_X_LEFT = False
-                        JOY_X_RIGHT = False
-                        JOY_X = 0
+                        joy_x_left = False
+                        joy_x_right = False
+                        joy_x = 0
                     elif event.state < -JOY_DEADZONE:
-                        JOY_X_LEFT = True
-                        JOY_X_RIGHT = False
-                        JOY_X = event.state / JOY_MAX_VALUE
+                        joy_x_left = True
+                        joy_x_right = False
+                        joy_x = event.state / JOY_MAX_VALUE
                     elif event.state > JOY_DEADZONE:
-                        JOY_X_LEFT = False
-                        JOY_X_RIGHT = True
-                        JOY_X = event.state / JOY_MAX_VALUE
+                        joy_x_left = False
+                        joy_x_right = True
+                        joy_x = event.state / JOY_MAX_VALUE
 
                 if event.code == "ABS_Y":
                     if event.state < JOY_DEADZONE and event.state > -JOY_DEADZONE:
-                        JOY_Y_FORWARD = False
-                        JOY_Y_BACKWARD = False
-                        JOY_Y = 0
+                        joy_y_forward = False
+                        joy_y_backward = False
+                        joy_y = 0
                     elif event.state < -JOY_DEADZONE:
-                        JOY_Y_FORWARD = True
-                        JOY_Y_BACKWARD = False
-                        JOY_Y = event.state / JOY_MAX_VALUE
+                        joy_y_forward = True
+                        joy_y_backward = False
+                        joy_y = event.state / JOY_MAX_VALUE
                     elif event.state > JOY_DEADZONE:
-                        JOY_Y_FORWARD = False
-                        JOY_Y_BACKWARD = True
-                        JOY_Y = event.state / JOY_MAX_VALUE
+                        joy_y_forward = False
+                        joy_y_backward = True
+                        joy_y = event.state / JOY_MAX_VALUE
 
                 if event.code == "ABS_RX":
                     if event.state < JOY_DEADZONE and event.state > -JOY_DEADZONE:
-                        JOY_RX_LEFT = False
-                        JOY_RX_RIGHT = False
-                        JOY_RX = 0
+                        joy_rx_left = False
+                        joy_rx_right = False
+                        joy_rx = 0
                     elif event.state < -JOY_DEADZONE:
-                        JOY_RX_LEFT = True
-                        JOY_RX_RIGHT = False
-                        JOY_RX = event.state / JOY_MAX_VALUE
+                        joy_rx_left = True
+                        joy_rx_right = False
+                        joy_rx = event.state / JOY_MAX_VALUE
                     elif event.state > JOY_DEADZONE:
-                        JOY_RX_LEFT = False
-                        JOY_RX_RIGHT = True
-                        JOY_RX = event.state / JOY_MAX_VALUE
+                        joy_rx_left = False
+                        joy_rx_right = True
+                        joy_rx = event.state / JOY_MAX_VALUE
 
                 if event.code == "ABS_RY":
                     if event.state < JOY_DEADZONE and event.state > -JOY_DEADZONE:
-                        JOY_RY_FORWARD = False
-                        JOY_RY_BACKWARD = False
-                        JOY_RY = 0
+                        joy_ry_forward = False
+                        joy_ry_backward = False
+                        joy_ry = 0
                     elif event.state < -JOY_DEADZONE:
-                        JOY_RY_FORWARD = True
-                        JOY_RY_BACKWARD = False
-                        JOY_RY = event.state / JOY_MAX_VALUE
+                        joy_ry_forward = True
+                        joy_ry_backward = False
+                        joy_ry = event.state / JOY_MAX_VALUE
                     elif event.state > JOY_DEADZONE:
-                        JOY_RY_FORWARD = False
-                        JOY_RY_BACKWARD = True
-                        JOY_RY = event.state / JOY_MAX_VALUE
+                        joy_ry_forward = False
+                        joy_ry_backward = True
+                        joy_ry = event.state / JOY_MAX_VALUE
 
-                if abs(JOY_RY) <= 0.7:
-                    ARDUINO_PITCH_SPEED = ARDUINO_PITCH_HALF_SPEED
-                else:
-                    ARDUINO_PITCH_SPEED = ARDUINO_PITCH_MAX_SPEED
-
-                if abs(JOY_X) <= 0.7:
-                    ARDUINO_YAW_SPEED = ARDUINO_YAW_HALF_SPEED
-                else:
-                    ARDUINO_YAW_SPEED = ARDUINO_YAW_MAX_SPEED
-
-                ARDUINO_ZOOM_SPEED = 2000
-
-                ZOOM_MOVE = 0
-                if JOY_TRIGGER_L > 0:
-                    ZOOM_MOVE = 1
-                elif JOY_TRIGGER_R > 0:
-                    ZOOM_MOVE = 2
-
-                if ZOOM_MOVE != ARDUINO_ZOOM_LAST:
-                    ARDUINO_ZOOM_LAST = ZOOM_MOVE
-                    if ZOOM_MOVE == 1:
-                        send_cmd(b"4")
-                    elif ZOOM_MOVE == 2:
-                        send_cmd(b"5")
-                    else:
-                        send_cmd(b"6")
-                        send_cmd(b"6")
-
-                # send_cmd(b'p') # set pitch step speed (higher is slower)
-                # send_cmd(pitch_speed)
-                # send_cmd(b'y') # set yaw step speed
-                # send_cmd(yaw_speed)
-                # print("Joy | Pitch:", ARDUINO_PITCH_MAX_SPEED * JOY_RY, "| Yaw:", ARDUINO_YAW_MAX_SPEED * JOY_X)
-
-                PITCH_MOVE = 0
-                if JOY_RY == 0:
-                    PITCH_MOVE = 0
-                    # send_cmd(b'c')
-                if JOY_RY > 0:
-                    PITCH_MOVE = 1
-                    # send_cmd(("a" + ARDUINO_PITCH_SPEED + ";").encode())
-                    # send_cmd(b'a')
-                if JOY_RY < 0:
-                    PITCH_MOVE = 2
-                    # send_cmd(("b" + ARDUINO_PITCH_SPEED + ";").encode())
-                    # send_cmd(b'b')
-
-                YAW_MOVE = 0
-                if JOY_X == 0:
-                    YAW_MOVE = 0
-                    # send_cmd(b'3')
-                if JOY_X > 0:
-                    YAW_MOVE = 1
-                    # send_cmd(b'1')
-                    # send_cmd(("1" + ARDUINO_YAW_SPEED + ";").encode())
-                if JOY_X < 0:
-                    YAW_MOVE = 2
-                    # send_cmd(b'2')
-                    # send_cmd(("2" + ARDUINO_YAW_SPEED + ";").encode())
-
-                if ARDUINO_PITCH_LAST != PITCH_MOVE:
-                    ARDUINO_PITCH_LAST = PITCH_MOVE
-                    if PITCH_MOVE == 1:
-                        send_cmd(b"a")
-                    elif PITCH_MOVE == 2:
-                        send_cmd(b"b")
-                    else:
-                        send_cmd(b"c")
-                        send_cmd(b"c")
-
-                if ARDUINO_YAW_LAST != YAW_MOVE:
-                    ARDUINO_YAW_LAST = YAW_MOVE
-                    if YAW_MOVE == 1:
-                        send_cmd(b"1")
-                    elif YAW_MOVE == 2:
-                        send_cmd(b"2")
-                    else:
-                        send_cmd(b"3")
-                        send_cmd(b"3")
-
-                # j,pitch,yaw,pitchSpeed,yawSpeed,zoom,zoomSpeed
-                # tell_cmd("j,{pitch},{yaw},{zoom},{pitch_speed}\n".format(pitch = PITCH_MOVE, yaw = YAW_MOVE, zoom = ZOOM_MOVE, pitch_speed = ARDUINO_PITCH_SPEED, yaw_speed = ARDUINO_YAW_SPEED, zoom_speed = ARDUINO_ZOOM_SPEED))
-                print(
-                    "Joy | X:",
-                    JOY_X,
-                    "| Y:",
-                    JOY_Y,
-                    "| RX:",
-                    JOY_RX,
-                    "| RY:",
-                    JOY_RY,
-                    "| Pitch:",
-                    ARDUINO_PITCH_SPEED,
-                    "| Yaw:",
-                    ARDUINO_YAW_SPEED,
-                    "| Zoom:",
-                    ZOOM_MOVE,
-                )
-                # print(event.ev_type, event.code, event.state)
+                # Calculate joystick values for Arduino
+                # Use right stick (RX, RY) for camera control, left stick (X, Y) for movement if needed
+                # Right stick Y (RY) = Pitch (tilt)
+                # Right stick X (RX) = Yaw (pan) - but we're using left stick X (joy_x) for yaw
+                # Actually, let's use: joy_x for yaw, joy_ry for pitch
+                
+                # Convert normalized joystick values (-1.0 to 1.0) to integer range (-32768 to 32768)
+                joystick_yaw = joy_x * JOYSTICK_MAX_INT
+                joystick_pitch = joy_ry * JOYSTICK_MAX_INT
+                
+                # Combine triggers for zoom (left trigger = zoom out, right trigger = zoom in)
+                # Negative value = zoom out, positive = zoom in
+                joystick_zoom = (joy_trigger_r - joy_trigger_l) * JOYSTICK_MAX_INT
+                
+                # Send joystick values if they've changed (with small threshold to reduce spam)
+                threshold = 100  # Only send if change is significant
+                if (abs(joystick_yaw - joystick_yaw_last) > threshold or
+                    abs(joystick_pitch - joystick_pitch_last) > threshold or
+                    abs(joystick_zoom - joystick_zoom_last) > threshold):
+                    
+                    send_joystick_values(joystick_yaw, joystick_pitch, joystick_zoom)
+                    joystick_yaw_last = joystick_yaw
+                    joystick_pitch_last = joystick_pitch
+                    joystick_zoom_last = joystick_zoom
+                    
+                    print(
+                        "Joy | Yaw:",
+                        f"{joystick_yaw:.0f}",
+                        "| Pitch:",
+                        f"{joystick_pitch:.0f}",
+                        "| Zoom:",
+                        f"{joystick_zoom:.0f}",
+                    )
 
     except KeyboardInterrupt:
         sys.exit(0)
