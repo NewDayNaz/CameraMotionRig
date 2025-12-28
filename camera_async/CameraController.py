@@ -534,14 +534,18 @@ while True:
                     if event.state == 1:
                         joy_dp_r = 1
                 if event.code == "ABS_Z":
-                    if event.state < 100:
+                    # Remove hard threshold - use full range for smoother control
+                    # Apply minimal deadzone to handle trigger noise
+                    if event.state < 5:
                         joy_trigger_l = 0
-                    elif event.state >= 100:
+                    else:
                         joy_trigger_l = event.state / 255
                 if event.code == "ABS_RZ":
-                    if event.state < 100:
+                    # Remove hard threshold - use full range for smoother control
+                    # Apply minimal deadzone to handle trigger noise
+                    if event.state < 5:
                         joy_trigger_r = 0
-                    elif event.state >= 100:
+                    else:
                         joy_trigger_r = event.state / 255
                 if event.code == "ABS_X":
                     if event.state < JOY_DEADZONE and event.state > -JOY_DEADZONE:
@@ -621,28 +625,32 @@ while True:
                 # Apply deadzone (minimal for triggers)
                 zoom_deadzone_normalized = JOYSTICK_DEADZONE_ZOOM / JOYSTICK_MAX_INT
                 if abs(trigger_diff) < zoom_deadzone_normalized:
-                    joystick_zoom_scaled = 0.0
+                    joystick_zoom_raw_scaled = 0.0
                 else:
                     # Linear scaling to full joystick range (like web UI does linear scaling)
                     # This gives smooth, proportional response matching web UI behavior
-                    joystick_zoom_scaled = trigger_diff * JOYSTICK_MAX_INT
+                    joystick_zoom_raw_scaled = trigger_diff * JOYSTICK_MAX_INT
                 
                 # Apply non-linear curve to reduce sensitivity at small deflections (pan/tilt only)
                 joystick_yaw_curved = apply_joystick_curve(joystick_yaw_raw, JOYSTICK_MAX_INT, JOYSTICK_DEADZONE_YAW)
                 joystick_pitch_curved = apply_joystick_curve(joystick_pitch_raw, JOYSTICK_MAX_INT, JOYSTICK_DEADZONE_PITCH)
                 
-                # Apply exponential smoothing to reduce jerkiness (pan/tilt only)
-                # Zoom is handled linearly like web UI - no smoothing here, ESP32 handles it
+                # Apply exponential smoothing to reduce jerkiness
+                # Pan/tilt: heavier smoothing for stability
                 joystick_yaw_smoothed = (JOYSTICK_SMOOTHING * joystick_yaw_curved + 
                                         (1.0 - JOYSTICK_SMOOTHING) * joystick_yaw_smoothed)
                 joystick_pitch_smoothed = (JOYSTICK_SMOOTHING * joystick_pitch_curved + 
                                           (1.0 - JOYSTICK_SMOOTHING) * joystick_pitch_smoothed)
-                # Zoom: no smoothing, use value directly (like web UI)
+                # Zoom: light smoothing (0.6 = 60% new, 40% old) to prevent jitter while maintaining responsiveness
+                # This matches web UI smoothness behavior
+                zoom_smoothing = 0.6  # Lighter smoothing for zoom to match web UI feel
+                joystick_zoom_smoothed = (zoom_smoothing * joystick_zoom_raw_scaled + 
+                                         (1.0 - zoom_smoothing) * joystick_zoom_smoothed)
                 
                 # Apply independent axis scaling for fine-tuning sensitivity
                 joystick_yaw_scaled = joystick_yaw_smoothed * JOYSTICK_SCALE_YAW
                 joystick_pitch_scaled = joystick_pitch_smoothed * JOYSTICK_SCALE_PITCH
-                # Zoom already scaled above, no additional scaling needed
+                joystick_zoom_scaled = joystick_zoom_smoothed  # Zoom already scaled, use smoothed value
                 
                 # Detect when axes enter deadzone (transition from non-zero to zero)
                 # We need to send explicit zero commands to stop drift
@@ -667,11 +675,14 @@ while True:
                 # Send if:
                 # 1. Enough time has passed AND values changed significantly, OR
                 # 2. Any axis entered deadzone (need to send zero to stop drift)
+                # For zoom, use lower threshold to match web UI smoothness
                 should_send = False
                 if time_since_last_send >= MIN_SEND_INTERVAL:
+                    # Use lower threshold for zoom to prevent jitter (match web UI behavior)
+                    zoom_threshold = 5  # Much lower threshold for zoom to ensure smooth updates
                     if (abs(joystick_yaw_scaled - joystick_yaw_last) > JOYSTICK_SEND_THRESHOLD or
                         abs(joystick_pitch_scaled - joystick_pitch_last) > JOYSTICK_SEND_THRESHOLD or
-                        abs(joystick_zoom_scaled - joystick_zoom_last) > JOYSTICK_SEND_THRESHOLD):
+                        abs(joystick_zoom_scaled - joystick_zoom_last) > zoom_threshold):
                         should_send = True
                 
                 # Always send when entering deadzone to stop drift (bypass rate limiting)
