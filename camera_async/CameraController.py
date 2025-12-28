@@ -38,6 +38,7 @@ JOYSTICK_SEND_THRESHOLD = 15  # Only send if change is > 1.5% of full range
 # 2.0 = quadratic curve (gentle at start, full range at end)
 # 3.0 = cubic curve (even more gentle at start)
 JOYSTICK_CURVE_EXPONENT = 2.5  # Quadratic-like curve for better low-end control
+JOYSTICK_CURVE_EXPONENT_ZOOM = 1.5  # Less aggressive curve for zoom (triggers need more linear response)
 
 # Deadzone thresholds - values within this range are treated as zero
 # Prevents drift and unwanted movement when joystick is centered
@@ -51,7 +52,7 @@ JOYSTICK_DEADZONE_ZOOM = 10    # ~1.5% of full range (32768) for zoom axis (smal
 # Lower values = less responsive, higher values = more responsive
 JOYSTICK_SCALE_YAW = 1.0    # Pan axis (full sensitivity)
 JOYSTICK_SCALE_PITCH = 0.8  # Tilt axis (reduced sensitivity for smoother control)
-JOYSTICK_SCALE_ZOOM = 1.0   # Zoom axis (full sensitivity)
+JOYSTICK_SCALE_ZOOM = 2.0   # Zoom axis (increased sensitivity - triggers need more range)
 
 def apply_joystick_curve(value, max_value, deadzone):
     """
@@ -627,8 +628,8 @@ while True:
                     normalized = (abs_normalized - zoom_deadzone_normalized) / (1.0 - zoom_deadzone_normalized)
                     # Clamp to 0-1.0 range (safety check)
                     normalized = max(0.0, min(1.0, normalized))
-                    # Apply curve
-                    curved = sign * (normalized ** JOYSTICK_CURVE_EXPONENT)
+                    # Apply less aggressive curve for zoom (triggers need more linear response)
+                    curved = sign * (normalized ** JOYSTICK_CURVE_EXPONENT_ZOOM)
                     # Scale back to full range
                     joystick_zoom_curved = curved * JOYSTICK_MAX_INT
                 

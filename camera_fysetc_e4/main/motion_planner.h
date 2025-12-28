@@ -45,13 +45,13 @@
 // Steps per degree for pan axis (adjust based on your gear ratio)
 // Typical values: 200 steps/rev motor = 200/360 = 0.556 steps/degree
 // With gear reduction, multiply by gear ratio (e.g., 10:1 = 5.56 steps/degree)
-#define PAN_STEPS_PER_DEGREE 0.556f  // Adjust this to match your hardware
+#define PAN_STEPS_PER_DEGREE 100.0f  // Adjust this to match your hardware
 
 // Tilt axis limits (degrees)
 // Maximum tilt range: separate limits for down (negative) and up (positive)
 // Down angle is typically less than up angle
-#define TILT_MAX_DEGREES_DOWN 30210.0f  // Maximum tilt down (negative direction)
-#define TILT_MAX_DEGREES_UP 37296.0f    // Maximum tilt up (positive direction)
+#define TILT_MAX_DEGREES_DOWN 20210.0f  // Maximum tilt down (negative direction)
+#define TILT_MAX_DEGREES_UP 27296.0f    // Maximum tilt up (positive direction)
 // Steps per degree for tilt axis (adjust based on your gear ratio)
 // Typical values: 200 steps/rev motor = 200/360 = 0.556 steps/degree
 // With gear reduction, multiply by gear ratio (e.g., 10:1 = 5.56 steps/degree)
