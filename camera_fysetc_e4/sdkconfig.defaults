@@ -24,6 +24,9 @@ CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
 
-# Flash size configuration (2MB)
-CONFIG_ESPTOOLPY_FLASHSIZE_2MB=y
+# Flash size configuration
+# Check actual flash size with: idf.py -p COM_PORT flash_id
+# Common sizes: 2MB, 4MB, 8MB, 16MB
+# Detected: 16MB flash - plenty of space for OTA partitions
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 

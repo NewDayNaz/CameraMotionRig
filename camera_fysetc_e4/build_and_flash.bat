@@ -68,6 +68,11 @@ if not exist "partitions.csv" (
 )
 echo Partition table file found: partitions.csv
 echo.
+echo Step 1b: Checking flash size (optional)...
+echo To check your board's actual flash size, run: idf.py -p !COM_PORT! flash_id
+echo Or check bootloader output when device starts.
+echo Current configuration: 16MB flash (adjust in sdkconfig.defaults if different)
+echo.
 echo Step 2: Cleaning and reconfiguring to ensure partition table is updated...
 echo Deleting sdkconfig to force regeneration from sdkconfig.defaults...
 if exist "sdkconfig" del "sdkconfig"
