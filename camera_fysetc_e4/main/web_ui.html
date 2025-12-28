@@ -104,7 +104,7 @@ button { padding: 10px 20px; margin: 5px; font-size: 16px; cursor: pointer; bord
 <div class="preset-grid" id="preset_grid"></div>
 <div style="margin-top: 10px;">
 <button class="btn-warning" onclick="savePreset()">Save Current Position</button>
-<input type="number" id="preset_save_idx" min="0" max="15" value="0" style="width: 60px; padding: 5px; margin-left: 10px;">
+<input type="number" id="preset_save_idx" min="1" max="15" value="1" style="width: 60px; padding: 5px; margin-left: 10px;">
 </div>
 </div>
 <div id="preset_editor_modal" class="modal">
@@ -424,7 +424,8 @@ function createPresetButtons() {
     return;
   }
   grid.innerHTML = '';
-  for (let i = 0; i < 16; i++) {
+  // Preset 0 is hidden (always 0,0,0), start from 1
+  for (let i = 1; i < 16; i++) {
     const btn = document.createElement('button');
     btn.className = 'btn-secondary preset-btn';
     btn.textContent = 'Preset ' + i;
@@ -439,6 +440,11 @@ function createPresetButtons() {
 }
 let currentEditingPreset = -1;
 function openPresetEditor(idx) {
+  // Preset 0 is read-only and cannot be edited
+  if (idx === 0) {
+    alert('Preset 0 is read-only and always returns to position 0,0,0');
+    return;
+  }
   currentEditingPreset = idx;
   document.getElementById('editor_preset_idx').textContent = idx;
   document.getElementById('preset_editor_modal').style.display = 'block';

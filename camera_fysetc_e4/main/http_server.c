@@ -341,6 +341,8 @@ static esp_err_t api_preset_get_handler(httpd_req_t *req) {
     }
     
     uint8_t preset_idx = (uint8_t)atoi(index_str);
+    
+    // Preset 0 is hidden but can still be queried (returns 0,0,0)
     preset_t preset;
     bool success = motion_controller_get_preset(preset_idx, &preset);
     
@@ -415,6 +417,20 @@ static esp_err_t api_preset_update_handler(httpd_req_t *req) {
     }
     
     uint8_t preset_idx = (uint8_t)idx->valueint;
+    
+    // Preset 0 is read-only and cannot be updated
+    if (preset_idx == 0) {
+        cJSON *response = cJSON_CreateObject();
+        cJSON_AddStringToObject(response, "status", "error");
+        cJSON_AddStringToObject(response, "error", "Preset 0 is read-only and cannot be updated");
+        char *response_str = cJSON_Print(response);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, response_str, strlen(response_str));
+        free(response_str);
+        cJSON_Delete(response);
+        return ESP_OK;
+    }
+    
     preset_t preset;
     preset_init_default(&preset);
     

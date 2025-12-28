@@ -30,6 +30,17 @@ bool preset_load(uint8_t index, preset_t* preset) {
         return false;
     }
     
+    // Preset 0 is always a hidden default preset at 0,0,0
+    if (index == 0) {
+        preset_init_default(preset);
+        // Ensure all positions are exactly 0.0
+        for (int i = 0; i < NUM_AXES; i++) {
+            preset->pos[i] = 0.0f;
+        }
+        preset->valid = true;
+        return true;
+    }
+    
     nvs_handle_t nvs_handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs_handle);
     if (err != ESP_OK) {
@@ -73,6 +84,12 @@ bool preset_save(uint8_t index, const preset_t* preset) {
         return false;
     }
     
+    // Preset 0 is read-only and cannot be saved
+    if (index == 0) {
+        ESP_LOGW(TAG, "Preset 0 is read-only and cannot be saved");
+        return false;
+    }
+    
     nvs_handle_t nvs_handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
     if (err != ESP_OK) {
@@ -105,6 +122,12 @@ bool preset_save(uint8_t index, const preset_t* preset) {
 bool preset_delete(uint8_t index) {
     if (index >= MAX_PRESETS) {
         ESP_LOGE(TAG, "Invalid preset index: %d", index);
+        return false;
+    }
+    
+    // Preset 0 is read-only and cannot be deleted
+    if (index == 0) {
+        ESP_LOGW(TAG, "Preset 0 is read-only and cannot be deleted");
         return false;
     }
     
@@ -160,6 +183,11 @@ void preset_init_default(preset_t* preset) {
 }
 
 bool preset_is_valid(uint8_t index) {
+    // Preset 0 is always valid (hidden default preset)
+    if (index == 0) {
+        return true;
+    }
+    
     preset_t preset;
     if (!preset_load(index, &preset)) {
         return false;
