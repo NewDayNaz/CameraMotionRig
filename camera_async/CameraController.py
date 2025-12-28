@@ -15,7 +15,23 @@ joystick_yaw_last = 0.0
 joystick_pitch_last = 0.0
 joystick_zoom_last = 0.0
 
+# Smoothed values (for filtering)
+joystick_yaw_smoothed = 0.0
+joystick_pitch_smoothed = 0.0
+joystick_zoom_smoothed = 0.0
+
 JOYSTICK_MAX_INT = 32768  # Maximum integer value for Arduino
+
+# Smoothing factor (0.0 = no smoothing, 1.0 = no change)
+# Lower values = more smoothing (slower response)
+JOYSTICK_SMOOTHING = 0.3  # 30% of new value, 70% of old value
+
+# Rate limiting for sending updates
+last_send_time = 0.0
+MIN_SEND_INTERVAL = 0.05  # Send at most 20 times per second (50ms between sends)
+
+# Threshold for sending updates (larger = less frequent sends)
+JOYSTICK_SEND_THRESHOLD = 500  # Only send if change is > 1.5% of full range
 
 arduino_back_last = 0
 arduino_start_last = 0
@@ -538,31 +554,47 @@ while True:
                 # Actually, let's use: joy_x for yaw, joy_ry for pitch
                 
                 # Convert normalized joystick values (-1.0 to 1.0) to integer range (-32768 to 32768)
-                joystick_yaw = joy_x * JOYSTICK_MAX_INT
-                joystick_pitch = joy_ry * JOYSTICK_MAX_INT
+                joystick_yaw_raw = joy_x * JOYSTICK_MAX_INT
+                joystick_pitch_raw = joy_ry * JOYSTICK_MAX_INT
                 
                 # Combine triggers for zoom (left trigger = zoom out, right trigger = zoom in)
                 # Negative value = zoom out, positive = zoom in
-                joystick_zoom = (joy_trigger_r - joy_trigger_l) * JOYSTICK_MAX_INT
+                joystick_zoom_raw = (joy_trigger_r - joy_trigger_l) * JOYSTICK_MAX_INT
                 
-                # Send joystick values if they've changed (with small threshold to reduce spam)
-                threshold = 100  # Only send if change is significant
-                if (abs(joystick_yaw - joystick_yaw_last) > threshold or
-                    abs(joystick_pitch - joystick_pitch_last) > threshold or
-                    abs(joystick_zoom - joystick_zoom_last) > threshold):
+                # Apply exponential smoothing to reduce jerkiness
+                # Formula: smoothed = smoothing * new + (1 - smoothing) * old
+                joystick_yaw_smoothed = (JOYSTICK_SMOOTHING * joystick_yaw_raw + 
+                                        (1.0 - JOYSTICK_SMOOTHING) * joystick_yaw_smoothed)
+                joystick_pitch_smoothed = (JOYSTICK_SMOOTHING * joystick_pitch_raw + 
+                                          (1.0 - JOYSTICK_SMOOTHING) * joystick_pitch_smoothed)
+                joystick_zoom_smoothed = (JOYSTICK_SMOOTHING * joystick_zoom_raw + 
+                                         (1.0 - JOYSTICK_SMOOTHING) * joystick_zoom_smoothed)
+                
+                # Rate limiting: only send if enough time has passed
+                current_time = time.time()
+                time_since_last_send = current_time - last_send_time
+                
+                # Check if values have changed significantly AND enough time has passed
+                if (time_since_last_send >= MIN_SEND_INTERVAL and
+                    (abs(joystick_yaw_smoothed - joystick_yaw_last) > JOYSTICK_SEND_THRESHOLD or
+                     abs(joystick_pitch_smoothed - joystick_pitch_last) > JOYSTICK_SEND_THRESHOLD or
+                     abs(joystick_zoom_smoothed - joystick_zoom_last) > JOYSTICK_SEND_THRESHOLD)):
                     
-                    send_joystick_values(joystick_yaw, joystick_pitch, joystick_zoom)
-                    joystick_yaw_last = joystick_yaw
-                    joystick_pitch_last = joystick_pitch
-                    joystick_zoom_last = joystick_zoom
+                    send_joystick_values(int(joystick_yaw_smoothed), 
+                                         int(joystick_pitch_smoothed), 
+                                         int(joystick_zoom_smoothed))
+                    joystick_yaw_last = joystick_yaw_smoothed
+                    joystick_pitch_last = joystick_pitch_smoothed
+                    joystick_zoom_last = joystick_zoom_smoothed
+                    last_send_time = current_time
                     
                     print(
                         "Joy | Yaw:",
-                        f"{joystick_yaw:.0f}",
+                        f"{joystick_yaw_smoothed:.0f}",
                         "| Pitch:",
-                        f"{joystick_pitch:.0f}",
+                        f"{joystick_pitch_smoothed:.0f}",
                         "| Zoom:",
-                        f"{joystick_zoom:.0f}",
+                        f"{joystick_zoom_smoothed:.0f}",
                     )
 
     except KeyboardInterrupt:
