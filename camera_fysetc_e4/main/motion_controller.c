@@ -24,6 +24,10 @@ static bool controller_initialized = false;
 static int64_t last_command_time[NUM_AXES];  // Last command time per axis (microseconds)
 static bool steppers_enabled = true;  // Track enable state
 
+// Preset goto debouncing: prevent rapid successive calls
+#define PRESET_GOTO_DEBOUNCE_MS 500  // 500ms debounce period
+static int64_t last_preset_goto_time = 0;  // Last preset goto time (microseconds)
+
 void motion_controller_init(void) {
     if (controller_initialized) {
         return;
@@ -207,6 +211,16 @@ bool motion_controller_goto_preset(uint8_t preset_index) {
         return false;
     }
     
+    // Debounce preset goto calls - prevent rapid successive calls
+    int64_t now = esp_timer_get_time();
+    int64_t time_since_last_goto = now - last_preset_goto_time;
+    if (time_since_last_goto < (PRESET_GOTO_DEBOUNCE_MS * 1000)) {
+        ESP_LOGW(TAG, "Preset goto debounced: %lld ms since last call (minimum %d ms)", 
+                 time_since_last_goto / 1000, PRESET_GOTO_DEBOUNCE_MS);
+        return false;
+    }
+    last_preset_goto_time = now;
+    
     preset_t preset;
     if (!preset_load(preset_index, &preset)) {
         ESP_LOGE(TAG, "Failed to load preset %d", preset_index);
@@ -290,9 +304,17 @@ bool motion_controller_goto_preset(uint8_t preset_index) {
                 current_pos[0], current_pos[1], current_pos[2],
                 duration, preset.speed_multiplier, preset.accel_multiplier);
         
+        // Log limits before planning move for debugging
+        ESP_LOGD(TAG, "Current limits - Pan: [%.1f, %.1f], Tilt: [%.1f, %.1f], Zoom: [%.1f, %.1f]",
+                 planner.limits_min[AXIS_PAN], planner.limits_max[AXIS_PAN],
+                 planner.limits_min[AXIS_TILT], planner.limits_max[AXIS_TILT],
+                 planner.limits_min[AXIS_ZOOM], planner.limits_max[AXIS_ZOOM]);
+        
         bool success = motion_planner_plan_move(&planner, preset.pos, duration, preset.easing_type);
         if (!success) {
             ESP_LOGE(TAG, "Failed to plan move to preset %d", preset_index);
+            ESP_LOGE(TAG, "Target was: (%.1f, %.1f, %.1f)", 
+                     preset.pos[0], preset.pos[1], preset.pos[2]);
             return false;
         }
         
