@@ -39,19 +39,25 @@ JOYSTICK_SEND_THRESHOLD = 500  # Only send if change is > 1.5% of full range
 # 3.0 = cubic curve (even more gentle at start)
 JOYSTICK_CURVE_EXPONENT = 2.5  # Quadratic-like curve for better low-end control
 
+# Deadzone threshold - values within this range are treated as zero
+# Prevents drift and unwanted movement when joystick is centered
+JOYSTICK_DEADZONE = 2000  # ~6% of full range (32768)
+
 def apply_joystick_curve(value, max_value):
     """
     Apply a non-linear curve to joystick input for better sensitivity control.
     Small movements are reduced, full deflection still reaches maximum.
+    Includes deadzone to prevent drift.
     
     Args:
         value: Raw joystick value (-max_value to max_value)
         max_value: Maximum joystick value (32768)
     
     Returns:
-        Curved value with same sign and range
+        Curved value with same sign and range, or 0.0 if in deadzone
     """
-    if abs(value) < 100:  # Very small values - treat as zero
+    # Apply deadzone - treat small values as zero
+    if abs(value) < JOYSTICK_DEADZONE:
         return 0.0
     
     # Normalize to -1.0 to 1.0
