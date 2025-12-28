@@ -20,40 +20,9 @@
 static const char* TAG = "http_server";
 static httpd_handle_t server_handle = NULL;
 
-// Web UI HTML (embedded)
-static const char html_page[] = 
-"<!DOCTYPE html>"
-"<html><head>"
-"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">"
-"<title>PTZ Camera Control</title>"
-"<style>"
-"body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }"
-".container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }"
-"h1 { color: #333; text-align: center; }"
-".section { margin: 20px 0; padding: 15px; background: #f9f9f9; border-radius: 5px; }"
-".section h2 { margin-top: 0; color: #555; }"
-".control-group { margin: 15px 0; }"
-"label { display: block; margin-bottom: 5px; font-weight: bold; color: #666; }"
-"input[type=\"range\"] { width: 100%; margin: 10px 0; }"
-"input[type=\"text\"] { width: 100px; padding: 5px; margin: 0 10px; }"
-"button { padding: 10px 20px; margin: 5px; font-size: 16px; cursor: pointer; border: none; border-radius: 5px; }"
-".btn-primary { background: #4CAF50; color: white; }"
-".btn-primary:hover { background: #45a049; }"
-".btn-secondary { background: #2196F3; color: white; }"
-".btn-secondary:hover { background: #0b7dda; }"
-".btn-danger { background: #f44336; color: white; }"
-".btn-danger:hover { background: #da190b; }"
-".btn-warning { background: #ff9800; color: white; }"
-".btn-warning:hover { background: #e68900; }"
-".status { padding: 10px; margin: 10px 0; border-radius: 5px; }"
-".status-info { background: #e3f2fd; color: #1976d2; }"
-".status-success { background: #e8f5e9; color: #388e3c; }"
-"#positions { font-family: monospace; font-size: 18px; }"
-".preset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin: 10px 0; }"
-".preset-btn { padding: 15px; font-size: 14px; position: relative; }"
-".preset-edit-btn { position: absolute; top: 2px; right: 2px; padding: 2px 6px; font-size: 10px; background: rgba(0,0,0,0.5); color: white; border: none; border-radius: 3px; cursor: pointer; }"
-".preset-edit-btn:hover { background: rgba(0,0,0,0.7); }"
-".modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); }"
+// Web UI HTML (embedded) - auto-generated from web_ui.html
+#include "web_ui_html.h"
+
 ".modal-content { background: white; margin: 5% auto; padding: 20px; border-radius: 10px; width: 90%; max-width: 600px; max-height: 80vh; overflow-y: auto; }"
 ".modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }"
 ".close { color: #aaa; font-size: 28px; font-weight: bold; cursor: pointer; }"
