@@ -33,6 +33,40 @@ MIN_SEND_INTERVAL = 0.05  # Send at most 20 times per second (50ms between sends
 # Threshold for sending updates (larger = less frequent sends)
 JOYSTICK_SEND_THRESHOLD = 500  # Only send if change is > 1.5% of full range
 
+# Joystick curve exponent for non-linear response
+# Values > 1.0 make small movements less sensitive (more control at low deflection)
+# 2.0 = quadratic curve (gentle at start, full range at end)
+# 3.0 = cubic curve (even more gentle at start)
+JOYSTICK_CURVE_EXPONENT = 2.5  # Quadratic-like curve for better low-end control
+
+def apply_joystick_curve(value, max_value):
+    """
+    Apply a non-linear curve to joystick input for better sensitivity control.
+    Small movements are reduced, full deflection still reaches maximum.
+    
+    Args:
+        value: Raw joystick value (-max_value to max_value)
+        max_value: Maximum joystick value (32768)
+    
+    Returns:
+        Curved value with same sign and range
+    """
+    if abs(value) < 100:  # Very small values - treat as zero
+        return 0.0
+    
+    # Normalize to -1.0 to 1.0
+    normalized = value / max_value
+    
+    # Apply curve (preserve sign)
+    sign = 1.0 if normalized >= 0 else -1.0
+    abs_normalized = abs(normalized)
+    
+    # Power curve: small values get reduced more
+    curved = sign * (abs_normalized ** JOYSTICK_CURVE_EXPONENT)
+    
+    # Scale back to original range
+    return curved * max_value
+
 arduino_back_last = 0
 arduino_start_last = 0
 arduino_bumper_l_last = 0
@@ -561,13 +595,18 @@ while True:
                 # Negative value = zoom out, positive = zoom in
                 joystick_zoom_raw = (joy_trigger_r - joy_trigger_l) * JOYSTICK_MAX_INT
                 
+                # Apply non-linear curve to reduce sensitivity at small deflections
+                joystick_yaw_curved = apply_joystick_curve(joystick_yaw_raw, JOYSTICK_MAX_INT)
+                joystick_pitch_curved = apply_joystick_curve(joystick_pitch_raw, JOYSTICK_MAX_INT)
+                joystick_zoom_curved = apply_joystick_curve(joystick_zoom_raw, JOYSTICK_MAX_INT)
+                
                 # Apply exponential smoothing to reduce jerkiness
                 # Formula: smoothed = smoothing * new + (1 - smoothing) * old
-                joystick_yaw_smoothed = (JOYSTICK_SMOOTHING * joystick_yaw_raw + 
+                joystick_yaw_smoothed = (JOYSTICK_SMOOTHING * joystick_yaw_curved + 
                                         (1.0 - JOYSTICK_SMOOTHING) * joystick_yaw_smoothed)
-                joystick_pitch_smoothed = (JOYSTICK_SMOOTHING * joystick_pitch_raw + 
+                joystick_pitch_smoothed = (JOYSTICK_SMOOTHING * joystick_pitch_curved + 
                                           (1.0 - JOYSTICK_SMOOTHING) * joystick_pitch_smoothed)
-                joystick_zoom_smoothed = (JOYSTICK_SMOOTHING * joystick_zoom_raw + 
+                joystick_zoom_smoothed = (JOYSTICK_SMOOTHING * joystick_zoom_curved + 
                                          (1.0 - JOYSTICK_SMOOTHING) * joystick_zoom_smoothed)
                 
                 # Rate limiting: only send if enough time has passed
