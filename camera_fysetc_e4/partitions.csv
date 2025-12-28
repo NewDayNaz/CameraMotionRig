@@ -1,10 +1,11 @@
 # Name,   Type, SubType, Offset,  Size, Flags
 # Note: if you have increased the bootloader size, make sure to update the offsets to avoid overlap
-# OTA partition table - requires ota_0 and ota_1 partitions (no factory partition)
+# OTA partition table - requires otadata, ota_0 and ota_1 partitions (no factory partition)
 # Configured for 16MB flash: each OTA partition is 2MB (0x200000) - total 4MB for OTA
 # This provides plenty of headroom for ~931KB binary and future growth
 nvs,      data, nvs,     0x9000,  0x6000,
 phy_init, data, phy,     0xf000,  0x1000,
-ota_0,    app,  ota_0,   0x10000, 0x200000,
-ota_1,    app,  ota_1,   0x210000,0x200000,
+otadata,  data, ota,     0x10000, 0x2000,
+ota_0,    app,  ota_0,   0x12000, 0x200000,
+ota_1,    app,  ota_1,   0x212000,0x200000,
 
