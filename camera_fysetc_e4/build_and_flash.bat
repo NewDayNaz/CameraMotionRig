@@ -167,12 +167,27 @@ goto :end
 
 :serial_flash
     echo.
-    echo Step 2: Erasing flash (skipped by default)...
-    REM Uncomment the next line to erase flash (recommended for first-time flashing)
-    REM idf.py -p !COM_PORT! erase-flash
+    echo Step 2: Erasing flash to ensure clean partition table...
+    echo WARNING: This will erase all data on the device!
+    echo.
+    set /p ERASE_CONFIRM="Erase flash? (y/N): "
+    if /i "!ERASE_CONFIRM!"=="Y" (
+        echo Erasing flash...
+        idf.py -p !COM_PORT! erase-flash
+        if errorlevel 1 (
+            echo Flash erase failed!
+            pause
+            exit /b 1
+        )
+        echo Flash erased successfully.
+        echo.
+    ) else (
+        echo Skipping flash erase. If OTA doesn't work, try erasing flash first.
+        echo.
+    )
     
     echo.
-    echo Step 3: Flashing firmware to !COM_PORT!...
+    echo Step 3: Flashing partition table and firmware to !COM_PORT!...
     echo.
     echo Note: With OTA partition table, firmware will be flashed to ota_0 partition
     echo       and automatically set as the boot partition.
@@ -185,7 +200,19 @@ goto :end
     echo.
     echo Using baud rate 115200 for more reliable flashing
     timeout /t 1 /nobreak >nul
+    REM Flash partition table and firmware together
+    REM The -p flag ensures partition table is flashed
     idf.py -p !COM_PORT! flash -b 115200
+    if errorlevel 1 (
+        echo.
+        echo Flash failed!
+        pause
+        exit /b 1
+    )
+    echo.
+    echo Step 4: Verifying partition table...
+    echo Running partition table info command...
+    idf.py -p !COM_PORT! partition-table
     
     if errorlevel 1 (
         echo.

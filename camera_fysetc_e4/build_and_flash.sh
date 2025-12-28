@@ -118,15 +118,42 @@ if [ "$FLASH_MODE" = "OTA" ]; then
     fi
 else
     echo ""
-    echo "Step 2: Erasing flash (skipped by default)..."
-    # Uncomment the next line to erase flash (recommended for first-time flashing)
-    # idf.py -p "$PORT" erase-flash
+    echo "Step 2: Erasing flash to ensure clean partition table..."
+    echo "WARNING: This will erase all data on the device!"
+    echo ""
+    read -p "Erase flash? (y/N): " ERASE_CONFIRM
+    if [[ "$ERASE_CONFIRM" =~ ^[Yy]$ ]]; then
+        echo "Erasing flash..."
+        idf.py -p "$PORT" erase-flash
+        if [ $? -ne 0 ]; then
+            echo "Flash erase failed!"
+            exit 1
+        fi
+        echo "Flash erased successfully."
+        echo ""
+    else
+        echo "Skipping flash erase. If OTA doesn't work, try erasing flash first."
+        echo ""
+    fi
     
     echo ""
-    echo "Step 3: Flashing firmware to $PORT..."
+    echo "Step 3: Flashing partition table and firmware to $PORT..."
+    echo ""
+    echo "Note: With OTA partition table, firmware will be flashed to ota_0 partition"
+    echo "      and automatically set as the boot partition."
+    echo ""
+    echo "If flashing fails, you may need to manually enter bootloader mode:"
+    echo "  1. Connect GPIO0 pin to GND using a jumper wire"
+    echo "  2. Press and release the RESET button"
+    echo "  3. Remove the GPIO0 to GND connection"
+    echo "  4. Wait 1 second, then run: idf.py -p $PORT flash"
+    echo ""
+    # Flash partition table and firmware together
+    # The -p flag ensures partition table is flashed
     idf.py -p "$PORT" flash
     
     if [ $? -ne 0 ]; then
+        echo ""
         echo "Flash failed!"
         echo "Make sure:"
         echo "  - Board is connected to $PORT"
@@ -137,7 +164,12 @@ else
     fi
     
     echo ""
-    echo "Step 4: Starting serial monitor..."
+    echo "Step 4: Verifying partition table..."
+    echo "Running partition table info command..."
+    idf.py -p "$PORT" partition-table
+    
+    echo ""
+    echo "Step 5: Starting serial monitor..."
     echo "Press Ctrl+] to exit monitor"
     echo ""
     idf.py -p "$PORT" monitor

@@ -504,13 +504,38 @@ static esp_err_t api_update_handler(httpd_req_t *req) {
         }
     }
     
+    // Diagnostic: Log running partition info
+    if (running != NULL) {
+        ESP_LOGI(TAG, "Running partition: %s, type=%d, subtype=%d, address=0x%x, size=%d", 
+                 running->label, running->type, running->subtype, running->address, running->size);
+    } else {
+        ESP_LOGW(TAG, "Running partition is NULL");
+    }
+    
+    // Diagnostic: List all OTA partitions
+    const esp_partition_t *ota_0 = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_0, NULL);
+    const esp_partition_t *ota_1 = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_1, NULL);
+    
+    if (ota_0 != NULL) {
+        ESP_LOGI(TAG, "Found ota_0: %s, address=0x%x, size=%d", ota_0->label, ota_0->address, ota_0->size);
+    } else {
+        ESP_LOGW(TAG, "ota_0 partition not found");
+    }
+    
+    if (ota_1 != NULL) {
+        ESP_LOGI(TAG, "Found ota_1: %s, address=0x%x, size=%d", ota_1->label, ota_1->address, ota_1->size);
+    } else {
+        ESP_LOGW(TAG, "ota_1 partition not found");
+    }
+    
     // Find next OTA partition
     update_partition = esp_ota_get_next_update_partition(NULL);
     if (update_partition == NULL) {
-        ESP_LOGE(TAG, "No OTA partition found");
+        ESP_LOGE(TAG, "No OTA partition found by esp_ota_get_next_update_partition");
+        ESP_LOGE(TAG, "This usually means: 1) No OTA partitions in partition table, or 2) Running from factory partition");
         cJSON *response = cJSON_CreateObject();
         cJSON_AddStringToObject(response, "status", "error");
-        cJSON_AddStringToObject(response, "error", "No OTA partition available");
+        cJSON_AddStringToObject(response, "error", "No OTA partition available. Device may need reflashing with OTA partition table.");
         char *response_str = cJSON_Print(response);
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req, response_str, strlen(response_str));
