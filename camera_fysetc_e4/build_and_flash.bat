@@ -60,7 +60,12 @@ if errorlevel 1 (
 )
 
 echo.
-echo Step 1: Building firmware...
+echo Step 1: Cleaning and reconfiguring to ensure partition table is updated...
+idf.py fullclean
+idf.py reconfigure
+
+echo.
+echo Step 2: Building firmware with new partition table...
 idf.py build
 if errorlevel 1 (
     echo Build failed!
@@ -167,7 +172,7 @@ goto :end
 
 :serial_flash
     echo.
-    echo Step 2: Erasing flash to ensure clean partition table...
+    echo Step 3: Erasing flash to ensure clean partition table...
     echo WARNING: This will erase all data on the device!
     echo.
     set /p ERASE_CONFIRM="Erase flash? (y/N): "
@@ -187,7 +192,7 @@ goto :end
     )
     
     echo.
-    echo Step 3: Flashing partition table and firmware to !COM_PORT!...
+    echo Step 4: Flashing partition table and firmware to !COM_PORT!...
     echo.
     echo Note: With OTA partition table, firmware will be flashed to ota_0 partition
     echo       and automatically set as the boot partition.
@@ -200,6 +205,18 @@ goto :end
     echo.
     echo Using baud rate 115200 for more reliable flashing
     timeout /t 1 /nobreak >nul
+    
+    REM Verify partition table binary exists
+    if not exist "build\partition_table\partition-table.bin" (
+        echo ERROR: Partition table binary not found!
+        echo Make sure the build completed successfully.
+        pause
+        exit /b 1
+    )
+    
+    echo Partition table binary found: build\partition_table\partition-table.bin
+    echo.
+    
     REM Flash partition table and firmware together
     REM The -p flag ensures partition table is flashed
     idf.py -p !COM_PORT! flash -b 115200
@@ -210,7 +227,7 @@ goto :end
         exit /b 1
     )
     echo.
-    echo Step 4: Verifying partition table...
+    echo Step 5: Verifying partition table...
     echo Running partition table info command...
     idf.py -p !COM_PORT! partition-table
     
@@ -222,7 +239,7 @@ goto :end
     )
     
     echo.
-    echo Step 4: Starting serial monitor...
+    echo Step 6: Starting serial monitor...
     echo Press Ctrl+] to exit monitor
     echo.
     idf.py -p !COM_PORT! monitor

@@ -56,7 +56,12 @@ if ! command -v idf.py &> /dev/null; then
     fi
 fi
 
-echo "Step 1: Building firmware..."
+echo "Step 1: Cleaning and reconfiguring to ensure partition table is updated..."
+idf.py fullclean
+idf.py reconfigure
+
+echo ""
+echo "Step 2: Building firmware with new partition table..."
 idf.py build
 
 if [ "$FLASH_MODE" = "OTA" ]; then
@@ -118,7 +123,7 @@ if [ "$FLASH_MODE" = "OTA" ]; then
     fi
 else
     echo ""
-    echo "Step 2: Erasing flash to ensure clean partition table..."
+    echo "Step 3: Erasing flash to ensure clean partition table..."
     echo "WARNING: This will erase all data on the device!"
     echo ""
     read -p "Erase flash? (y/N): " ERASE_CONFIRM
@@ -137,7 +142,7 @@ else
     fi
     
     echo ""
-    echo "Step 3: Flashing partition table and firmware to $PORT..."
+    echo "Step 4: Flashing partition table and firmware to $PORT..."
     echo ""
     echo "Note: With OTA partition table, firmware will be flashed to ota_0 partition"
     echo "      and automatically set as the boot partition."
@@ -148,6 +153,17 @@ else
     echo "  3. Remove the GPIO0 to GND connection"
     echo "  4. Wait 1 second, then run: idf.py -p $PORT flash"
     echo ""
+    
+    # Verify partition table binary exists
+    if [ ! -f "build/partition_table/partition-table.bin" ]; then
+        echo "ERROR: Partition table binary not found!"
+        echo "Make sure the build completed successfully."
+        exit 1
+    fi
+    
+    echo "Partition table binary found: build/partition_table/partition-table.bin"
+    echo ""
+    
     # Flash partition table and firmware together
     # The -p flag ensures partition table is flashed
     idf.py -p "$PORT" flash
@@ -164,12 +180,12 @@ else
     fi
     
     echo ""
-    echo "Step 4: Verifying partition table..."
+    echo "Step 5: Verifying partition table..."
     echo "Running partition table info command..."
     idf.py -p "$PORT" partition-table
     
     echo ""
-    echo "Step 5: Starting serial monitor..."
+    echo "Step 6: Starting serial monitor..."
     echo "Press Ctrl+] to exit monitor"
     echo ""
     idf.py -p "$PORT" monitor
