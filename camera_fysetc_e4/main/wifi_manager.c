@@ -62,6 +62,11 @@ bool wifi_manager_init(const char* ssid, const char* password) {
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    
+    // Disable WiFi power saving to prevent disconnections
+    // WIFI_PS_NONE = no power saving (best for servers/always-on applications)
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+    
     ESP_ERROR_CHECK(esp_wifi_start());
 
     ESP_LOGI(TAG, "WiFi initialization finished, connecting to SSID: %s", ssid);

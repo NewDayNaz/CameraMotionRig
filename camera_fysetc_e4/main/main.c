@@ -73,7 +73,7 @@ static void serial_task(void* pvParameters) {
                     const float JOYSTICK_MAX = 32768.0f;
                     const float MAX_VEL_PAN = 2000.0f;
                     const float MAX_VEL_TILT = 2000.0f;
-                    const float MAX_VEL_ZOOM = 200.0f;   // Reduced significantly for slower zoom control
+                    const float MAX_VEL_ZOOM = 50.0f;    // Very slow for zoom control (small travel range)
                     
                     // Scale yaw (pan) from -32768..32768 to -MAX_VEL_PAN..MAX_VEL_PAN
                     scaled_velocities[0] = (cmd.velocities[0] / JOYSTICK_MAX) * MAX_VEL_PAN;
