@@ -15,13 +15,13 @@
 #include "quintic.h"
 
 // Maximum velocity (steps per second) - for manual/joystick control
-#define MAX_VELOCITY_PAN  2000.0f
-#define MAX_VELOCITY_TILT 2000.0f
+#define MAX_VELOCITY_PAN  500.0f   // Reduced for testing
+#define MAX_VELOCITY_TILT 500.0f   // Reduced for testing
 #define MAX_VELOCITY_ZOOM 50.0f    // Very slow for zoom control (small travel range)
 
 // Maximum acceleration (steps per second squared) - for manual/joystick control
-#define MAX_ACCEL_PAN  1000.0f
-#define MAX_ACCEL_TILT 1000.0f
+#define MAX_ACCEL_PAN  250.0f      // Reduced proportionally for testing
+#define MAX_ACCEL_TILT 250.0f      // Reduced proportionally for testing
 #define MAX_ACCEL_ZOOM 25.0f       // Reduced proportionally for zoom
 
 // Preset move limits (very conservative for cinematic moves)
