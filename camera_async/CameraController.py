@@ -43,8 +43,8 @@ JOYSTICK_CURVE_EXPONENT_ZOOM = 1.5  # Less aggressive curve for zoom (triggers n
 # Deadzone thresholds - values within this range are treated as zero
 # Prevents drift and unwanted movement when joystick is centered
 # Can be tuned per-axis for different sensitivity requirements
-JOYSTICK_DEADZONE_YAW = 2000    # ~6% of full range (32768) for pan axis
-JOYSTICK_DEADZONE_PITCH = 2000  # ~6% of full range (32768) for tilt axis
+JOYSTICK_DEADZONE_YAW = 1000    # ~6% of full range (32768) for pan axis
+JOYSTICK_DEADZONE_PITCH = 1000  # ~6% of full range (32768) for tilt axis
 JOYSTICK_DEADZONE_ZOOM = 10    # ~1.5% of full range (32768) for zoom axis (smaller for more sensitive control)
 
 # Independent axis scaling factors (0.0 to 1.0)
