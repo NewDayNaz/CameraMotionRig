@@ -254,7 +254,8 @@ void motion_planner_set_precision_mode(motion_planner_t* planner, bool enabled) 
 
 void motion_planner_update(motion_planner_t* planner, float dt) {
     if (planner->manual_mode) {
-        // Manual velocity mode - apply slew limiting and generate constant velocity segments
+        // Manual velocity mode - immediate response (no slew rate limiting for joystick/velocity commands)
+        // Generate constant velocity segments
         for (int i = 0; i < NUM_AXES; i++) {
             float target_vel = planner->velocities[i];
             
@@ -279,16 +280,9 @@ void motion_planner_update(motion_planner_t* planner, float dt) {
                 target_vel = -planner->max_velocity[i];
             }
             
-            // Apply slew rate limiting
-            float max_change = slew_rate_limits[i] * dt;
-            float vel_diff = target_vel - planner->manual_slew_limit[i];
-            if (vel_diff > max_change) {
-                planner->manual_slew_limit[i] += max_change;
-            } else if (vel_diff < -max_change) {
-                planner->manual_slew_limit[i] -= max_change;
-            } else {
-                planner->manual_slew_limit[i] = target_vel;
-            }
+            // No slew rate limiting for manual mode - immediate response for joystick/velocity commands
+            // Acceleration limiting is only used for automated GOTO moves (quintic trajectories)
+            planner->manual_slew_limit[i] = target_vel;
             
         }
         
