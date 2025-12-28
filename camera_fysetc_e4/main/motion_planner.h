@@ -76,6 +76,7 @@ typedef struct {
     // Manual velocity mode state
     bool manual_mode;
     float manual_slew_limit[NUM_AXES];  // Current velocity after slew limiting
+    float fractional_step_accum[NUM_AXES];  // Fractional step accumulator for smooth low-speed motion
 } motion_planner_t;
 
 /**

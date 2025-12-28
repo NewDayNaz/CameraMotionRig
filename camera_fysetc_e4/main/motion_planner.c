@@ -59,6 +59,11 @@ void motion_planner_init(motion_planner_t* planner, segment_queue_t* queue) {
     planner->precision_multiplier = 0.25f;
     planner->precision_mode = false;
     planner->move_easing = EASING_SMOOTHERSTEP;
+    
+    // Initialize fractional step accumulators (for smooth low-speed motion)
+    for (int i = 0; i < NUM_AXES; i++) {
+        planner->fractional_step_accum[i] = 0.0f;
+    }
 }
 
 void motion_planner_set_position(motion_planner_t* planner, uint8_t axis, float position) {
@@ -244,6 +249,7 @@ void motion_planner_set_manual_mode(motion_planner_t* planner, bool enabled) {
         for (int i = 0; i < NUM_AXES; i++) {
             planner->velocities[i] = 0.0f;
             planner->manual_slew_limit[i] = 0.0f;
+            planner->fractional_step_accum[i] = 0.0f;  // Reset fractional accumulator
         }
     }
 }
@@ -309,10 +315,18 @@ void motion_planner_update(motion_planner_t* planner, float dt) {
                     // Clamp to limit
                     steps_float = 0.0f;
                     planner->manual_slew_limit[i] = 0.0f;
+                    planner->fractional_step_accum[i] = 0.0f;  // Reset accumulator at limits
                 }
                 
-                seg.steps[i] = (int32_t)roundf(steps_float);
-                planner->positions[i] += steps_float;
+                // Accumulate fractional steps for smooth low-speed motion
+                planner->fractional_step_accum[i] += steps_float;
+                
+                // Extract integer steps from accumulator
+                int32_t steps_int = (int32_t)truncf(planner->fractional_step_accum[i]);
+                planner->fractional_step_accum[i] -= (float)steps_int;  // Keep only fractional part
+                
+                seg.steps[i] = steps_int;
+                planner->positions[i] += (float)steps_int;  // Update position with integer steps only
             }
             
             if (!segment_queue_push(planner->queue, &seg)) {
@@ -380,6 +394,7 @@ void motion_planner_stop(motion_planner_t* planner) {
     for (int i = 0; i < NUM_AXES; i++) {
         planner->velocities[i] = 0.0f;
         planner->manual_slew_limit[i] = 0.0f;
+        planner->fractional_step_accum[i] = 0.0f;  // Reset fractional accumulator
     }
     segment_queue_clear(planner->queue);
 }
