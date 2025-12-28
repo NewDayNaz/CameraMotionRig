@@ -611,52 +611,46 @@ while True:
                 
                 # Combine triggers for zoom (left trigger = zoom out, right trigger = zoom in)
                 # Negative value = zoom out, positive = zoom in
-                # Triggers are normalized 0-1.0, so difference ranges from -1.0 to 1.0
+                # Process zoom like web UI: linear, no curve, no smoothing (ESP32 handles smoothing)
+                # Web UI: velZ = normalized * 50 (steps/sec), sent directly
+                # Joystick: we send -32768..32768, ESP32 scales to (value / 32768) * MAX_VEL_ZOOM
+                # ESP32 MAX_VEL_ZOOM = 20, so max zoom via joystick is 20 steps/sec
+                # To match web UI behavior: linear scaling, no curve, no smoothing
                 trigger_diff = joy_trigger_r - joy_trigger_l
                 
-                # Apply deadzone to normalized trigger difference (0-1.0 range)
-                # Convert deadzone from full range (32768) to normalized range (0-1.0)
+                # Apply deadzone (minimal for triggers)
                 zoom_deadzone_normalized = JOYSTICK_DEADZONE_ZOOM / JOYSTICK_MAX_INT
-                
                 if abs(trigger_diff) < zoom_deadzone_normalized:
-                    joystick_zoom_curved = 0.0
+                    joystick_zoom_scaled = 0.0
                 else:
-                    # Apply curve to normalized value, then scale back
-                    sign = 1.0 if trigger_diff >= 0 else -1.0
-                    abs_normalized = abs(trigger_diff)
-                    # Normalize after deadzone removal
-                    normalized = (abs_normalized - zoom_deadzone_normalized) / (1.0 - zoom_deadzone_normalized)
-                    # Clamp to 0-1.0 range (safety check)
-                    normalized = max(0.0, min(1.0, normalized))
-                    # Apply less aggressive curve for zoom (triggers need more linear response)
-                    curved = sign * (normalized ** JOYSTICK_CURVE_EXPONENT_ZOOM)
-                    # Scale back to full range
-                    joystick_zoom_curved = curved * JOYSTICK_MAX_INT
+                    # Linear scaling to full joystick range (like web UI does linear scaling)
+                    # This gives smooth, proportional response matching web UI behavior
+                    joystick_zoom_scaled = trigger_diff * JOYSTICK_MAX_INT
                 
-                # Apply non-linear curve to reduce sensitivity at small deflections
+                # Apply non-linear curve to reduce sensitivity at small deflections (pan/tilt only)
                 joystick_yaw_curved = apply_joystick_curve(joystick_yaw_raw, JOYSTICK_MAX_INT, JOYSTICK_DEADZONE_YAW)
                 joystick_pitch_curved = apply_joystick_curve(joystick_pitch_raw, JOYSTICK_MAX_INT, JOYSTICK_DEADZONE_PITCH)
                 
-                # Apply exponential smoothing to reduce jerkiness
-                # Formula: smoothed = smoothing * new + (1 - smoothing) * old
+                # Apply exponential smoothing to reduce jerkiness (pan/tilt only)
+                # Zoom is handled linearly like web UI - no smoothing here, ESP32 handles it
                 joystick_yaw_smoothed = (JOYSTICK_SMOOTHING * joystick_yaw_curved + 
                                         (1.0 - JOYSTICK_SMOOTHING) * joystick_yaw_smoothed)
                 joystick_pitch_smoothed = (JOYSTICK_SMOOTHING * joystick_pitch_curved + 
                                           (1.0 - JOYSTICK_SMOOTHING) * joystick_pitch_smoothed)
-                joystick_zoom_smoothed = (JOYSTICK_SMOOTHING * joystick_zoom_curved + 
-                                         (1.0 - JOYSTICK_SMOOTHING) * joystick_zoom_smoothed)
+                # Zoom: no smoothing, use value directly (like web UI)
                 
                 # Apply independent axis scaling for fine-tuning sensitivity
                 joystick_yaw_scaled = joystick_yaw_smoothed * JOYSTICK_SCALE_YAW
                 joystick_pitch_scaled = joystick_pitch_smoothed * JOYSTICK_SCALE_PITCH
-                joystick_zoom_scaled = joystick_zoom_smoothed * JOYSTICK_SCALE_ZOOM
+                # Zoom already scaled above, no additional scaling needed
                 
                 # Detect when axes enter deadzone (transition from non-zero to zero)
                 # We need to send explicit zero commands to stop drift
                 # Use scaled values for deadzone detection (apply scaling factor to deadzone thresholds)
                 yaw_deadzone_scaled = JOYSTICK_DEADZONE_YAW * JOYSTICK_SCALE_YAW
                 pitch_deadzone_scaled = JOYSTICK_DEADZONE_PITCH * JOYSTICK_SCALE_PITCH
-                zoom_deadzone_scaled = JOYSTICK_DEADZONE_ZOOM * JOYSTICK_SCALE_ZOOM
+                # Zoom uses direct deadzone (no additional scaling since it's already linear)
+                zoom_deadzone_scaled = JOYSTICK_DEADZONE_ZOOM
                 
                 yaw_in_deadzone = abs(joystick_yaw_scaled) < yaw_deadzone_scaled
                 pitch_in_deadzone = abs(joystick_pitch_scaled) < pitch_deadzone_scaled
