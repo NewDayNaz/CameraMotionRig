@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "esp_event.h"
 #include "esp_netif.h"
+#include "http_server.h"
 #include <string.h>
 
 static const char* TAG = "wifi_manager";
@@ -21,12 +22,21 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_connected = false;
         ESP_LOGW(TAG, "WiFi disconnected, attempting to reconnect...");
+        // Stop HTTP server when WiFi disconnects
+        http_server_stop();
         esp_wifi_connect();
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         snprintf(ip_address, sizeof(ip_address), IPSTR, IP2STR(&event->ip_info.ip));
         wifi_connected = true;
         ESP_LOGI(TAG, "WiFi connected! IP address: %s", ip_address);
+        
+        // Start HTTP server when WiFi connects
+        if (http_server_start()) {
+            ESP_LOGI(TAG, "HTTP server started at http://%s/", ip_address);
+        } else {
+            ESP_LOGE(TAG, "Failed to start HTTP server");
+        }
     }
 }
 

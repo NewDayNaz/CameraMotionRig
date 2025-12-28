@@ -878,6 +878,12 @@ static esp_err_t api_preset_update_handler(httpd_req_t *req) {
 }
 
 bool http_server_start(void) {
+    // If server is already running, return success
+    if (server_handle != NULL) {
+        ESP_LOGI(TAG, "HTTP server already running");
+        return true;
+    }
+    
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_uri_handlers = 10;
     
