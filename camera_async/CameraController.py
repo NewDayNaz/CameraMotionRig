@@ -614,7 +614,7 @@ while True:
                 # Process zoom like web UI: linear, no curve, no smoothing (ESP32 handles smoothing)
                 # Web UI: velZ = normalized * 50 (steps/sec), sent directly
                 # Joystick: we send -32768..32768, ESP32 scales to (value / 32768) * MAX_VEL_ZOOM
-                # ESP32 MAX_VEL_ZOOM = 20, so max zoom via joystick is 20 steps/sec
+                # ESP32 MAX_VEL_ZOOM = 30, so max zoom via joystick is 30 steps/sec
                 # To match web UI behavior: linear scaling, no curve, no smoothing
                 trigger_diff = joy_trigger_r - joy_trigger_l
                 
