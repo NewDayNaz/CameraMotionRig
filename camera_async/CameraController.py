@@ -59,41 +59,67 @@ def clear_cached_port():
     except Exception as e:
         print(f"Warning: Could not clear port cache: {e}")
 
-def test_port(port_path):
+def test_port(port_path, max_test_time=2.0):
     """
     Test if a specific port responds to STATUS command.
     Returns True if port is valid ESP32, False otherwise.
+    
+    Args:
+        port_path: Path to serial port to test
+        max_test_time: Maximum time to spend testing this port (seconds)
     """
+    test_start = time.time()
     try:
-        test_serial = serial.Serial(port_path, ARDUINO_BAUDRATE, timeout=0.5)
-        time.sleep(0.1)  # Give port time to initialize
+        # Try to open port with short timeout
+        test_serial = serial.Serial(port_path, ARDUINO_BAUDRATE, timeout=0.2)
+        
+        # Give port minimal time to initialize
+        time.sleep(0.05)
+        
+        # Check if we've exceeded max test time
+        if time.time() - test_start >= max_test_time:
+            test_serial.close()
+            return False
         
         # Clear any existing data in buffer
-        test_serial.reset_input_buffer()
+        try:
+            test_serial.reset_input_buffer()
+        except:
+            pass
         
         # Send STATUS command (read-only, doesn't change anything)
         test_serial.write(b"STATUS\n")
         test_serial.flush()
         
-        # Wait for response (up to 1 second)
+        # Wait for response (up to max_test_time total, but shorter per-iteration)
         response = b""
-        start_time = time.time()
-        while time.time() - start_time < 1.0:
+        response_start = time.time()
+        max_response_time = min(1.0, max_test_time - (time.time() - test_start))
+        
+        while (time.time() - response_start) < max_response_time:
+            # Check overall timeout
+            if time.time() - test_start >= max_test_time:
+                break
+                
             if test_serial.in_waiting > 0:
                 response += test_serial.read(test_serial.in_waiting)
                 # Check if we have a complete line
                 if b'\n' in response:
                     break
-            time.sleep(0.01)
+            time.sleep(0.05)  # Slightly longer sleep to reduce CPU usage
         
         test_serial.close()
         
         # Check if response matches expected format: STATUS:PAN:... TILT:... ZOOM:...
-        response_str = response.decode('ascii', errors='ignore').strip()
-        if response_str.startswith("STATUS:PAN:") and "TILT:" in response_str and "ZOOM:" in response_str:
-            return True
+        if response:
+            response_str = response.decode('ascii', errors='ignore').strip()
+            if response_str.startswith("STATUS:PAN:") and "TILT:" in response_str and "ZOOM:" in response_str:
+                return True
         return False
         
+    except (serial.SerialException, OSError, ValueError) as e:
+        # Port doesn't exist, is busy, or invalid - skip it quickly
+        return False
     except Exception:
         return False
 
@@ -120,8 +146,8 @@ def detect_esp32_port(force_rescan=False, timeout_seconds=15):
                 print(f"\nTimeout: Could not find ESP32 within {timeout_seconds} seconds")
                 return None
                 
-            print(f"Trying cached port: {cached_port}...", end=" ")
-            if test_port(cached_port):
+            print(f"Trying cached port: {cached_port}...", end=" ", flush=True)
+            if test_port(cached_port, max_test_time=2.0):
                 print("✓ Cached port is valid!")
                 return cached_port
             else:
@@ -137,6 +163,8 @@ def detect_esp32_port(force_rescan=False, timeout_seconds=15):
     
     print(f"Scanning {len(ports)} serial port(s) for ESP32...")
     
+    # Calculate max time per port (leave some buffer for overhead)
+    ports_remaining = len(ports)
     for port_info in ports:
         # Check timeout before each port test
         elapsed = time.time() - start_time
@@ -144,16 +172,24 @@ def detect_esp32_port(force_rescan=False, timeout_seconds=15):
             print(f"\nTimeout: Could not find ESP32 within {timeout_seconds} seconds")
             return None
         
-        port_path = port_info.device
-        print(f"  Trying {port_path}...", end=" ")
+        # Calculate remaining time and allocate per port
+        remaining_time = timeout_seconds - elapsed
+        # Reserve 0.5 seconds for overhead, divide rest among remaining ports
+        max_time_per_port = max(1.0, (remaining_time - 0.5) / ports_remaining)
+        ports_remaining -= 1
         
-        if test_port(port_path):
+        port_path = port_info.device
+        print(f"  Trying {port_path}...", end=" ", flush=True)
+        
+        port_test_start = time.time()
+        if test_port(port_path, max_test_time=max_time_per_port):
             print(f"✓ Found ESP32!")
             # Save to cache for next time
             save_cached_port(port_path)
             return port_path
         else:
-            print(f"✗")
+            elapsed_test = time.time() - port_test_start
+            print(f"✗ ({elapsed_test:.1f}s)")
     
     print("ESP32 not found on any serial port")
     return None
