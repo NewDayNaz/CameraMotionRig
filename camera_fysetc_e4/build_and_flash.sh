@@ -68,19 +68,32 @@ echo "To check your board's actual flash size, run: idf.py -p $PORT flash_id"
 echo "Or check bootloader output when device starts."
 echo "Current configuration: 16MB flash (adjust in sdkconfig.defaults if different)"
 echo ""
-echo "Step 2: Cleaning and reconfiguring to ensure partition table is updated..."
-echo "Deleting sdkconfig to force regeneration from sdkconfig.defaults..."
-rm -f sdkconfig sdkconfig.old
-idf.py fullclean
-idf.py reconfigure
 
-echo ""
-echo "Step 3: Building firmware with new partition table..."
-idf.py build
+# Check if we're doing OTA - if so, skip fullclean/reconfigure (partition table won't change)
+if [ "$FLASH_MODE" = "OTA" ]; then
+    echo "Step 2: Building firmware for OTA update..."
+    echo "NOTE: Partition table is only used for build - OTA cannot change partitions."
+    echo ""
+    idf.py build
+else
+    echo "Step 2: Cleaning and reconfiguring to ensure partition table is updated..."
+    echo "Deleting sdkconfig to force regeneration from sdkconfig.defaults..."
+    rm -f sdkconfig sdkconfig.old
+    idf.py fullclean
+    idf.py reconfigure
+    
+    echo ""
+    echo "Step 3: Building firmware with new partition table..."
+    idf.py build
+fi
 
 if [ "$FLASH_MODE" = "OTA" ]; then
     echo ""
-    echo "Step 2: Uploading firmware via OTA..."
+    echo "Step 3: Uploading firmware via OTA..."
+    echo ""
+    echo "NOTE: OTA updates only change the firmware binary, NOT the partition table."
+    echo "      The partition table on the device was set during initial serial flash."
+    echo "      If you need to change partitions, you must flash via serial."
     echo ""
     
     # Find the firmware binary
