@@ -56,12 +56,21 @@ if ! command -v idf.py &> /dev/null; then
     fi
 fi
 
-echo "Step 1: Cleaning and reconfiguring to ensure partition table is updated..."
+echo "Step 1: Verifying partition table file..."
+if [ ! -f "partitions.csv" ]; then
+    echo "ERROR: partitions.csv not found in project root!"
+    exit 1
+fi
+echo "Partition table file found: partitions.csv"
+echo ""
+echo "Step 2: Cleaning and reconfiguring to ensure partition table is updated..."
+echo "Deleting sdkconfig to force regeneration from sdkconfig.defaults..."
+rm -f sdkconfig sdkconfig.old
 idf.py fullclean
 idf.py reconfigure
 
 echo ""
-echo "Step 2: Building firmware with new partition table..."
+echo "Step 3: Building firmware with new partition table..."
 idf.py build
 
 if [ "$FLASH_MODE" = "OTA" ]; then
@@ -123,7 +132,7 @@ if [ "$FLASH_MODE" = "OTA" ]; then
     fi
 else
     echo ""
-    echo "Step 3: Erasing flash to ensure clean partition table..."
+    echo "Step 4: Erasing flash to ensure clean partition table..."
     echo "WARNING: This will erase all data on the device!"
     echo ""
     read -p "Erase flash? (y/N): " ERASE_CONFIRM
@@ -142,7 +151,7 @@ else
     fi
     
     echo ""
-    echo "Step 4: Flashing partition table and firmware to $PORT..."
+    echo "Step 5: Flashing partition table and firmware to $PORT..."
     echo ""
     echo "Note: With OTA partition table, firmware will be flashed to ota_0 partition"
     echo "      and automatically set as the boot partition."
@@ -180,12 +189,12 @@ else
     fi
     
     echo ""
-    echo "Step 5: Verifying partition table..."
+    echo "Step 6: Verifying partition table..."
     echo "Running partition table info command..."
     idf.py -p "$PORT" partition-table
     
     echo ""
-    echo "Step 6: Starting serial monitor..."
+    echo "Step 7: Starting serial monitor..."
     echo "Press Ctrl+] to exit monitor"
     echo ""
     idf.py -p "$PORT" monitor

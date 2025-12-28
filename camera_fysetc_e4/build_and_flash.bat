@@ -60,12 +60,23 @@ if errorlevel 1 (
 )
 
 echo.
-echo Step 1: Cleaning and reconfiguring to ensure partition table is updated...
+echo Step 1: Verifying partition table file...
+if not exist "partitions.csv" (
+    echo ERROR: partitions.csv not found in project root!
+    pause
+    exit /b 1
+)
+echo Partition table file found: partitions.csv
+echo.
+echo Step 2: Cleaning and reconfiguring to ensure partition table is updated...
+echo Deleting sdkconfig to force regeneration from sdkconfig.defaults...
+if exist "sdkconfig" del "sdkconfig"
+if exist "sdkconfig.old" del "sdkconfig.old"
 idf.py fullclean
 idf.py reconfigure
 
 echo.
-echo Step 2: Building firmware with new partition table...
+echo Step 3: Building firmware with new partition table...
 idf.py build
 if errorlevel 1 (
     echo Build failed!
@@ -172,7 +183,7 @@ goto :end
 
 :serial_flash
     echo.
-    echo Step 3: Erasing flash to ensure clean partition table...
+    echo Step 4: Erasing flash to ensure clean partition table...
     echo WARNING: This will erase all data on the device!
     echo.
     set /p ERASE_CONFIRM="Erase flash? (y/N): "
@@ -192,7 +203,7 @@ goto :end
     )
     
     echo.
-    echo Step 4: Flashing partition table and firmware to !COM_PORT!...
+    echo Step 5: Flashing partition table and firmware to !COM_PORT!...
     echo.
     echo Note: With OTA partition table, firmware will be flashed to ota_0 partition
     echo       and automatically set as the boot partition.
@@ -227,7 +238,7 @@ goto :end
         exit /b 1
     )
     echo.
-    echo Step 5: Verifying partition table...
+    echo Step 6: Verifying partition table...
     echo Running partition table info command...
     idf.py -p !COM_PORT! partition-table
     
@@ -239,7 +250,7 @@ goto :end
     )
     
     echo.
-    echo Step 6: Starting serial monitor...
+    echo Step 7: Starting serial monitor...
     echo Press Ctrl+] to exit monitor
     echo.
     idf.py -p !COM_PORT! monitor
