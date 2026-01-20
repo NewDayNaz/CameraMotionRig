@@ -24,9 +24,9 @@
 // 2. Jogging to maximum range of motion
 // 3. Reading the position and updating these defines
 // If endstop is not hit within this range, homing will bail out and assume current position as home
-#define MAX_PAN_RANGE_STEPS   10000000.0f   // Adjust after calibration
-#define MAX_TILT_RANGE_STEPS  10000000.0f   // Adjust after calibration
-#define MAX_ZOOM_RANGE_STEPS  10000000.0f    // Adjust after calibration
+#define MAX_PAN_RANGE_STEPS   18400.0f   // Adjust after calibration
+#define MAX_TILT_RANGE_STEPS  15230.0f   // Adjust after calibration
+#define MAX_ZOOM_RANGE_STEPS  1000.0f    // Adjust after calibration
 
 // Homing velocity (steps/sec) - slower for accuracy
 #define HOMING_VELOCITY 200.0f
