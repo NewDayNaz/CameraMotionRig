@@ -4,9 +4,14 @@
  */
 
 #include "http_server.h"
-#include "motion_controller.h"
-#include "motion_planner.h"  // For MAX_VELOCITY_* macros
+#include "stepper_simple.h"
+#include "preset_storage.h"
 #include "wifi_manager.h"
+
+// Maximum velocities for web UI (steps/sec)
+#define MAX_VELOCITY_PAN  500.0f  // Increased for better responsiveness
+#define MAX_VELOCITY_TILT 500.0f  // Increased for better responsiveness
+#define MAX_VELOCITY_ZOOM 50.0f
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "cJSON.h"
@@ -123,13 +128,13 @@ static esp_err_t root_handler(httpd_req_t *req) {
 
 // Handler for /api/positions - GET current positions
 static esp_err_t api_positions_handler(httpd_req_t *req) {
-    float positions[3];
-    motion_controller_get_positions(positions);
+    float pan, tilt, zoom;
+    stepper_simple_get_positions(&pan, &tilt, &zoom);
     
     cJSON *json = cJSON_CreateObject();
-    cJSON_AddNumberToObject(json, "pan", positions[0]);
-    cJSON_AddNumberToObject(json, "tilt", positions[1]);
-    cJSON_AddNumberToObject(json, "zoom", positions[2]);
+    cJSON_AddNumberToObject(json, "pan", pan);
+    cJSON_AddNumberToObject(json, "tilt", tilt);
+    cJSON_AddNumberToObject(json, "zoom", zoom);
     
     char *json_string = cJSON_Print(json);
     httpd_resp_set_type(req, "application/json");
@@ -165,7 +170,7 @@ static esp_err_t api_velocity_handler(httpd_req_t *req) {
     if (tilt) velocities[1] = (float)tilt->valuedouble;
     if (zoom) velocities[2] = (float)zoom->valuedouble;
     
-    motion_controller_set_velocities(velocities);
+    stepper_simple_set_velocities(velocities[0], velocities[1], velocities[2]);
     
     cJSON_Delete(json);
     
@@ -207,13 +212,14 @@ static esp_err_t api_command_handler(httpd_req_t *req) {
     bool success = false;
     
     if (strcmp(command, "home") == 0) {
-        success = motion_controller_home(255);  // Home all axes
+        stepper_simple_home();
+        success = true;
     } else if (strcmp(command, "stop") == 0) {
-        motion_controller_stop();
+        stepper_simple_stop();
         success = true;
     } else if (strcmp(command, "precision") == 0) {
         // Toggle precision mode - we'd need to track state or query it
-        motion_controller_set_precision_mode(true);  // For now, just enable
+        stepper_simple_set_precision_mode(true);  // For now, just enable
         success = true;
     }
     
@@ -260,7 +266,7 @@ static esp_err_t api_preset_goto_handler(httpd_req_t *req) {
     }
     
     uint8_t preset_idx = (uint8_t)idx->valueint;
-    bool success = motion_controller_goto_preset(preset_idx);
+    bool success = stepper_simple_goto_preset(preset_idx);
     
     cJSON_Delete(json);
     
@@ -305,7 +311,7 @@ static esp_err_t api_preset_save_handler(httpd_req_t *req) {
     }
     
     uint8_t preset_idx = (uint8_t)idx->valueint;
-    bool success = motion_controller_save_preset(preset_idx);
+    bool success = stepper_simple_save_preset(preset_idx);
     
     cJSON_Delete(json);
     
@@ -344,7 +350,7 @@ static esp_err_t api_preset_get_handler(httpd_req_t *req) {
     
     // Preset 0 is hidden but can still be queried (returns 0,0,0)
     preset_t preset;
-    bool success = motion_controller_get_preset(preset_idx, &preset);
+    bool success = preset_load(preset_idx, &preset);
     
     cJSON *response = cJSON_CreateObject();
     if (success && preset.valid) {
@@ -478,7 +484,7 @@ static esp_err_t api_preset_update_handler(httpd_req_t *req) {
     
     cJSON_Delete(json);
     
-    bool success = motion_controller_update_preset(preset_idx, &preset);
+    bool success = preset_save(preset_idx, &preset);
     
     cJSON *response = cJSON_CreateObject();
     if (success) {

@@ -12,15 +12,9 @@ idf_component_register(
     SRCS 
         "main.c"
         "board.c"
-        "segment.c"
-        "stepper_executor.c"
-        "motion_planner.c"
-        "quintic.c"
-        "homing.c"
+        "stepper_simple.c"
         "preset_storage.c"
         "usb_serial.c"
-        "motion_controller.c"
-        "tmc2209.c"
         "wifi_manager.c"
         "http_server.c"
     INCLUDE_DIRS 

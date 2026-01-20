@@ -2,49 +2,45 @@
  * @file main.c
  * @brief Main application for FYSETC E4 PTZ Camera Rig
  * 
- * Coordinates all subsystems:
- * - USB Serial command parsing
- * - Motion controller
- * - Stepper executor (ISR-based)
+ * Simplified implementation based on camera_async but with:
+ * - Web server with OTA firmware updates
+ * - Board config
+ * - Preset loading/saving commands and web UI
+ * - Joystick/velocity control web UI
  */
 
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
-#include "esp_timer.h"
 #include "nvs_flash.h"
-#include "esp_system.h"
-#include "esp_rom_sys.h"
 #include "driver/gpio.h"
 
 #include "board.h"
-#include "motion_controller.h"
-#include "usb_serial.h"
+#include "stepper_simple.h"
 #include "preset_storage.h"
-#include "stepper_executor.h"
+#include "usb_serial.h"
 #include "wifi_manager.h"
 #include "http_server.h"
 #include "wifi_config.h"
 
 static const char* TAG = "main";
 
-#define UPDATE_TASK_PERIOD_MS 10  // 10ms update period = 100Hz
+#define UPDATE_TASK_PERIOD_MS 1  // 1ms update period for stepper control
 #define UPDATE_TASK_STACK_SIZE 4096
 #define UPDATE_TASK_PRIORITY 5
 
 #define SERIAL_TASK_STACK_SIZE 4096
 #define SERIAL_TASK_PRIORITY 3
 
-// Update task - runs motion controller and planner updates
+// Update task - runs stepper control
 static void update_task(void* pvParameters) {
     const TickType_t xDelay = pdMS_TO_TICKS(UPDATE_TASK_PERIOD_MS);
-    float dt = UPDATE_TASK_PERIOD_MS / 1000.0f;
     
     ESP_LOGI(TAG, "Update task started");
     
     while (1) {
-        motion_controller_update(dt);
+        stepper_simple_update();
         vTaskDelay(xDelay);
     }
 }
@@ -61,34 +57,30 @@ static void serial_task(void* pvParameters) {
             switch (cmd.type) {
                 case CMD_VEL:
                     // Set velocities for manual mode
-                    motion_controller_set_velocities(cmd.velocities);
+                    stepper_simple_set_velocities(cmd.velocities[0], 
+                                                   cmd.velocities[1], 
+                                                   cmd.velocities[2]);
                     ESP_LOGI(TAG, "VEL: %.2f, %.2f, %.2f", 
                             cmd.velocities[0], cmd.velocities[1], cmd.velocities[2]);
                     break;
                     
                 case CMD_JOYSTICK:
                     // Convert joystick values (-32768 to 32768) to velocities
-                    // Scale to MAX_VELOCITY range
-                    float scaled_velocities[3];
                     const float JOYSTICK_MAX = 32768.0f;
-                    // Reduced max velocities for smoother, less jerky control
-                    const float MAX_VEL_PAN = 200.0f;   // Full steps/sec (was 500)
-                    const float MAX_VEL_TILT = 200.0f;  // Full steps/sec (was 500)
-                    const float MAX_VEL_ZOOM = 50.0f;   // Full steps/sec (was 50)
+                    const float MAX_VEL_PAN = 500.0f;   // Full steps/sec (increased for better responsiveness)
+                    const float MAX_VEL_TILT = 500.0f;  // Full steps/sec (increased for better responsiveness)
+                    const float MAX_VEL_ZOOM = 50.0f;   // Full steps/sec
                     
-                    // Scale yaw (pan) from -32768..32768 to -MAX_VEL_PAN..MAX_VEL_PAN
-                    scaled_velocities[0] = (cmd.velocities[0] / JOYSTICK_MAX) * MAX_VEL_PAN;
-                    // Scale pitch (tilt) from -32768..32768 to -MAX_VEL_TILT..MAX_VEL_TILT
-                    scaled_velocities[1] = (cmd.velocities[1] / JOYSTICK_MAX) * MAX_VEL_TILT;
-                    // Scale zoom from -32768..32768 to -MAX_VEL_ZOOM..MAX_VEL_ZOOM
-                    scaled_velocities[2] = (cmd.velocities[2] / JOYSTICK_MAX) * MAX_VEL_ZOOM;
+                    float pan_vel = (cmd.velocities[0] / JOYSTICK_MAX) * MAX_VEL_PAN;
+                    float tilt_vel = (cmd.velocities[1] / JOYSTICK_MAX) * MAX_VEL_TILT;
+                    float zoom_vel = (cmd.velocities[2] / JOYSTICK_MAX) * MAX_VEL_ZOOM;
                     
-                    motion_controller_set_velocities(scaled_velocities);
+                    stepper_simple_set_velocities(pan_vel, tilt_vel, zoom_vel);
                     break;
                     
                 case CMD_GOTO:
                     // Move to preset
-                    if (motion_controller_goto_preset(cmd.preset_index)) {
+                    if (stepper_simple_goto_preset(cmd.preset_index)) {
                         usb_serial_send_status("OK");
                     } else {
                         usb_serial_send_status("ERROR: Preset not found");
@@ -97,7 +89,7 @@ static void serial_task(void* pvParameters) {
                     
                 case CMD_SAVE:
                     // Save current position as preset
-                    if (motion_controller_save_preset(cmd.preset_index)) {
+                    if (stepper_simple_save_preset(cmd.preset_index)) {
                         usb_serial_send_status("OK");
                     } else {
                         usb_serial_send_status("ERROR: Save failed");
@@ -106,44 +98,34 @@ static void serial_task(void* pvParameters) {
                     
                 case CMD_HOME:
                     // Start homing sequence
-                    if (motion_controller_home(255)) {  // Home all axes
-                        usb_serial_send_status("HOMING");
-                    } else {
-                        usb_serial_send_status("ERROR: Homing failed");
-                    }
+                    stepper_simple_home();
+                    usb_serial_send_status("HOMING");
                     break;
                     
                 case CMD_POS:
                     // Query current positions
-                    motion_controller_get_positions(positions);
+                    stepper_simple_get_positions(&positions[0], &positions[1], &positions[2]);
                     usb_serial_send_position(positions[0], positions[1], positions[2]);
                     break;
                     
                 case CMD_STATUS:
                     // Query system status
-                    motion_controller_get_positions(positions);
+                    stepper_simple_get_positions(&positions[0], &positions[1], &positions[2]);
                     usb_serial_send("STATUS:PAN:%.2f TILT:%.2f ZOOM:%.2f\n",
                                    positions[0], positions[1], positions[2]);
                     break;
                     
                 case CMD_STOP:
                     // Stop all motion
-                    motion_controller_stop();
+                    stepper_simple_stop();
                     usb_serial_send_status("STOPPED");
                     break;
                     
                 case CMD_PRECISION:
                     // Set precision mode
-                    motion_controller_set_precision_mode(cmd.precision_enable);
+                    stepper_simple_set_precision_mode(cmd.precision_enable);
                     usb_serial_send_status(cmd.precision_enable ? "PRECISION_ON" : "PRECISION_OFF");
                     break;
-                    
-                case CMD_LIMITS:
-                    // Set soft limits
-                    motion_controller_set_limits(cmd.limits_axis, cmd.limits_min, cmd.limits_max);
-                    usb_serial_send_status("OK");
-                    break;
-                    
                     
                 case CMD_UNKNOWN:
                     usb_serial_send_status("ERROR: Unknown command");
@@ -170,14 +152,11 @@ void app_main(void) {
     // Initialize USB serial
     usb_serial_init();
     
-    // Initialize motion controller (includes executor and planner)
-    motion_controller_init();
+    // Initialize simple stepper control
+    stepper_simple_init();
     
     // Enable stepper drivers
     board_set_enable(true);
-    
-    // Start stepper executor
-    stepper_executor_start();
     
     ESP_LOGI(TAG, "System initialized, starting tasks");
     
@@ -217,15 +196,8 @@ void app_main(void) {
     
     ESP_LOGI(TAG, "Tasks started, system ready");
     
-    // Main task - reduced logging to avoid serial interference
-    // Position can be queried via POS command or web interface
+    // Main task
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(10000));  // Reduced logging frequency: every 10 seconds
-        // Periodic status logging (much less frequent)
-        // Commented out entirely - use POS command or web interface for position info
-        // float pos[3];
-        // motion_controller_get_positions(pos);
-        // ESP_LOGI(TAG, "Pos: PAN=%.1f TILT=%.1f ZOOM=%.1f", pos[0], pos[1], pos[2]);
+        vTaskDelay(pdMS_TO_TICKS(10000));
     }
 }
-

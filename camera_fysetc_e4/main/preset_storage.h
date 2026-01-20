@@ -15,11 +15,19 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "quintic.h"
 #include "board.h"
 
 // Maximum number of presets
 #define MAX_PRESETS 16
+
+/**
+ * @brief Easing function type (simplified for preset storage)
+ */
+typedef enum {
+    EASING_LINEAR,
+    EASING_SMOOTHERSTEP,  // Quintic smootherstep
+    EASING_SIGMOID
+} easing_type_t;
 
 /**
  * @brief Approach mode for preset moves
