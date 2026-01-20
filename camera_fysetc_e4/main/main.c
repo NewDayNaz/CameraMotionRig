@@ -121,12 +121,6 @@ static void serial_task(void* pvParameters) {
                     usb_serial_send_status("STOPPED");
                     break;
                     
-                case CMD_PRECISION:
-                    // Set precision mode
-                    stepper_simple_set_precision_mode(cmd.precision_enable);
-                    usb_serial_send_status(cmd.precision_enable ? "PRECISION_ON" : "PRECISION_OFF");
-                    break;
-                    
                 case CMD_UNKNOWN:
                     usb_serial_send_status("ERROR: Unknown command");
                     break;

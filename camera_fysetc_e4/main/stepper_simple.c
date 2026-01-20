@@ -28,7 +28,6 @@ typedef struct {
 
 static axis_state_t axes[NUM_AXES];
 static bool initialized = false;
-static bool precision_mode = false;
 static bool homing_active = false;
 static uint8_t homing_axis = 0;
 static int32_t homing_start_position[NUM_AXES];  // Starting position when homing began
@@ -47,18 +46,12 @@ static float preset_decel_start_distance[3]; // Distance at which to start decel
 
 // Constants
 #define MIN_STEP_DELAY_US 250  // Minimum step delay (max speed ~2000 steps/sec)
-#define PRECISION_MULTIPLIER 0.25f  // Precision mode speed multiplier
 // Note: MIN/MAX velocity constants are defined in stepper_limits.h
 
 // Helper function to convert velocity to step delay
 static uint32_t velocity_to_step_delay(float velocity) {
     if (fabsf(velocity) < 0.1f) {
         return 0;  // Stopped
-    }
-    
-    // Apply precision mode
-    if (precision_mode) {
-        velocity *= PRECISION_MULTIPLIER;
     }
     
     // Calculate step delay: delay_us = 1000000 / velocity
@@ -88,7 +81,6 @@ void stepper_simple_init(void) {
     }
     
     initialized = true;
-    precision_mode = false;
     homing_active = false;
     preset_move_active = false;
     
@@ -558,11 +550,6 @@ void stepper_simple_home(void) {
     axes[0].target_velocity = -HOMING_VELOCITY;  // Move towards endstop
     
     ESP_LOGI(TAG, "Homing started - axis 0 (%s)", axis_names[0]);
-}
-
-void stepper_simple_set_precision_mode(bool enabled) {
-    precision_mode = enabled;
-    ESP_LOGI(TAG, "Precision mode: %s", enabled ? "ON" : "OFF");
 }
 
 bool stepper_simple_is_homing(void) {

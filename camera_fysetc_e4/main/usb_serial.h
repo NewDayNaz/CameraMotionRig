@@ -30,7 +30,6 @@ typedef enum {
     CMD_POS,        // POS
     CMD_STATUS,     // STATUS
     CMD_STOP,       // STOP
-    CMD_PRECISION,  // PRECISION <0|1>
     CMD_LIMITS,     // LIMITS <axis> <min> <max>
     CMD_UNKNOWN
 } cmd_type_t;
@@ -42,7 +41,6 @@ typedef struct {
     cmd_type_t type;
     float velocities[3];  // For VEL command
     uint8_t preset_index; // For GOTO/SAVE commands
-    bool precision_enable; // For PRECISION command
     uint8_t limits_axis;   // For LIMITS command
     float limits_min;
     float limits_max;

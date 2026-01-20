@@ -218,10 +218,6 @@ static esp_err_t api_command_handler(httpd_req_t *req) {
     } else if (strcmp(command, "stop") == 0) {
         stepper_simple_stop();
         success = true;
-    } else if (strcmp(command, "precision") == 0) {
-        // Toggle precision mode - we'd need to track state or query it
-        stepper_simple_set_precision_mode(true);  // For now, just enable
-        success = true;
     }
     
     cJSON_Delete(json);

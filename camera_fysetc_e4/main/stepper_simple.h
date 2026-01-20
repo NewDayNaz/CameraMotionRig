@@ -60,12 +60,6 @@ bool stepper_simple_save_preset(uint8_t preset_index);
 void stepper_simple_home(void);
 
 /**
- * @brief Set precision mode (reduces speeds)
- * @param enabled true to enable precision mode
- */
-void stepper_simple_set_precision_mode(bool enabled);
-
-/**
  * @brief Check if homing is currently active
  * @return true if homing sequence is in progress
  */
