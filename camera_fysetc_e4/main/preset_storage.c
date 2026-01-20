@@ -9,8 +9,8 @@
 #include "esp_log.h"
 #include <string.h>
 
-static const char* TAG = "preset_storage";
-static const char* NVS_NAMESPACE = "camera_presets_simple";  // Updated namespace for simplified format
+static const char* TAG = "preset_store";
+static const char* NVS_NAMESPACE = "preset_data";
 
 void preset_storage_init(void) {
     esp_err_t ret = nvs_flash_init();
