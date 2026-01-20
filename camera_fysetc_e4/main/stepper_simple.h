@@ -65,4 +65,10 @@ void stepper_simple_home(void);
  */
 void stepper_simple_set_precision_mode(bool enabled);
 
+/**
+ * @brief Check if homing is currently active
+ * @return true if homing sequence is in progress
+ */
+bool stepper_simple_is_homing(void);
+
 #endif // STEPPER_SIMPLE_H

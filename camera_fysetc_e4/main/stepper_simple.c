@@ -31,6 +31,8 @@ static bool initialized = false;
 static bool precision_mode = false;
 static bool homing_active = false;
 static uint8_t homing_axis = 0;
+static int32_t homing_start_position[NUM_AXES];  // Starting position when homing began
+static int32_t homing_steps_taken[NUM_AXES];     // Steps taken during homing (absolute value)
 
 // Preset move state
 static bool preset_move_active = false;
@@ -95,6 +97,8 @@ void stepper_simple_init(void) {
         preset_total_distance[i] = 0.0f;
         preset_decel_start_distance[i] = 0.0f;
         preset_max_speed[i] = 0.0f;
+        homing_start_position[i] = 0;
+        homing_steps_taken[i] = 0;
     }
     
     ESP_LOGI(TAG, "Simple stepper control initialized");
@@ -198,32 +202,79 @@ void stepper_simple_update(void) {
     
     // Handle homing
     if (homing_active) {
-        // Read endstop
-        bool endstop_triggered = false;
-        if (homing_axis < NUM_AXES && endstop_pins[homing_axis] != GPIO_NUM_NC) {
-            endstop_triggered = (gpio_get_level(endstop_pins[homing_axis]) == 0);  // Active LOW
-        }
-        
-        if (endstop_triggered) {
-            // Endstop hit - stop and set position to 0
-            axes[homing_axis].position = 0;
-            axes[homing_axis].velocity = 0.0f;
-            axes[homing_axis].target_velocity = 0.0f;
-            axes[homing_axis].move_direction = 0;
-            gpio_set_level(step_pins[homing_axis], 0);
+        if (homing_axis < NUM_AXES) {
+            // Calculate steps taken from starting position (absolute value)
+            int32_t current_pos = axes[homing_axis].position;
+            int32_t steps_from_start = current_pos - homing_start_position[homing_axis];
+            homing_steps_taken[homing_axis] = (steps_from_start < 0) ? -steps_from_start : steps_from_start;
             
-            homing_axis++;
-            if (homing_axis >= NUM_AXES) {
-                homing_active = false;
-                ESP_LOGI(TAG, "Homing complete");
-            } else {
-                // Start homing next axis
-                axes[homing_axis].target_velocity = -100.0f;  // Move towards endstop
-                ESP_LOGI(TAG, "Homing axis %d", homing_axis);
+            // Get maximum range for this axis
+            float max_range = 0.0f;
+            if (homing_axis == AXIS_PAN) {
+                max_range = MAX_PAN_RANGE_STEPS;
+            } else if (homing_axis == AXIS_TILT) {
+                max_range = MAX_TILT_RANGE_STEPS;
+            } else if (homing_axis == AXIS_ZOOM) {
+                max_range = MAX_ZOOM_RANGE_STEPS;
             }
-        } else {
-            // Move towards endstop
-            axes[homing_axis].target_velocity = -100.0f;  // Move towards endstop
+            
+            // Check if we've exceeded maximum range
+            if (homing_steps_taken[homing_axis] >= (int32_t)max_range) {
+                // Bail out - assume current position as home
+                ESP_LOGW(TAG, "Homing axis %d: Max range reached (%d steps), assuming current position as home", 
+                         homing_axis, homing_steps_taken[homing_axis]);
+                axes[homing_axis].position = 0;
+                axes[homing_axis].velocity = 0.0f;
+                axes[homing_axis].target_velocity = 0.0f;
+                axes[homing_axis].move_direction = 0;
+                gpio_set_level(step_pins[homing_axis], 0);
+                
+                // Move to next axis
+                homing_axis++;
+                if (homing_axis >= NUM_AXES) {
+                    homing_active = false;
+                    ESP_LOGI(TAG, "Homing complete (some axes may have bailed out)");
+                } else {
+                    // Start homing next axis
+                    homing_start_position[homing_axis] = axes[homing_axis].position;
+                    homing_steps_taken[homing_axis] = 0;
+                    axes[homing_axis].target_velocity = -HOMING_VELOCITY;  // Move towards endstop
+                    ESP_LOGI(TAG, "Homing axis %d (%s)", homing_axis, axis_names[homing_axis]);
+                }
+            } else {
+                // Read endstop
+                bool endstop_triggered = false;
+                if (endstop_pins[homing_axis] != GPIO_NUM_NC) {
+                    endstop_triggered = (gpio_get_level(endstop_pins[homing_axis]) == 0);  // Active LOW
+                }
+                
+                if (endstop_triggered) {
+                    // Endstop hit - stop and set position to 0
+                    ESP_LOGI(TAG, "Homing axis %d (%s): Endstop hit after %d steps", 
+                             homing_axis, axis_names[homing_axis], homing_steps_taken[homing_axis]);
+                    axes[homing_axis].position = 0;
+                    axes[homing_axis].velocity = 0.0f;
+                    axes[homing_axis].target_velocity = 0.0f;
+                    axes[homing_axis].move_direction = 0;
+                    gpio_set_level(step_pins[homing_axis], 0);
+                    
+                    // Move to next axis
+                    homing_axis++;
+                    if (homing_axis >= NUM_AXES) {
+                        homing_active = false;
+                        ESP_LOGI(TAG, "Homing complete");
+                    } else {
+                        // Start homing next axis
+                        homing_start_position[homing_axis] = axes[homing_axis].position;
+                        homing_steps_taken[homing_axis] = 0;
+                        axes[homing_axis].target_velocity = -HOMING_VELOCITY;  // Move towards endstop
+                        ESP_LOGI(TAG, "Homing axis %d (%s)", homing_axis, axis_names[homing_axis]);
+                    }
+                } else {
+                    // Move towards endstop
+                    axes[homing_axis].target_velocity = -HOMING_VELOCITY;  // Move towards endstop
+                }
+            }
         }
     }
     
@@ -298,6 +349,12 @@ void stepper_simple_update(void) {
 
 void stepper_simple_set_velocities(float pan_vel, float tilt_vel, float zoom_vel) {
     if (!initialized) {
+        return;
+    }
+    
+    // Block velocity commands during homing
+    if (homing_active) {
+        ESP_LOGW(TAG, "Velocity command blocked - homing in progress");
         return;
     }
     
@@ -491,14 +548,24 @@ void stepper_simple_home(void) {
     homing_active = true;
     homing_axis = 0;
     
-    // Start first axis moving towards endstop
-    axes[0].target_velocity = -100.0f;  // Move towards endstop
+    // Record starting positions for all axes
+    for (int i = 0; i < NUM_AXES; i++) {
+        homing_start_position[i] = axes[i].position;
+        homing_steps_taken[i] = 0;
+    }
     
-    ESP_LOGI(TAG, "Homing started");
+    // Start first axis moving towards endstop
+    axes[0].target_velocity = -HOMING_VELOCITY;  // Move towards endstop
+    
+    ESP_LOGI(TAG, "Homing started - axis 0 (%s)", axis_names[0]);
 }
 
 void stepper_simple_set_precision_mode(bool enabled) {
     precision_mode = enabled;
     ESP_LOGI(TAG, "Precision mode: %s", enabled ? "ON" : "OFF");
+}
+
+bool stepper_simple_is_homing(void) {
+    return homing_active;
 }
 
