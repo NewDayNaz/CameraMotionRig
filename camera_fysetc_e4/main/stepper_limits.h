@@ -10,12 +10,12 @@
 #define STEPPER_LIMITS_H
 
 // Minimum velocities to prevent stalling (steps/sec)
-#define MIN_PAN_TILT_VELOCITY 10.0f
+#define MIN_PAN_TILT_VELOCITY 20.0f
 #define MIN_ZOOM_VELOCITY 10.0f
 
 // Maximum velocities to prevent step skipping (steps/sec)
-#define MAX_PAN_VELOCITY 700.0f
-#define MAX_TILT_VELOCITY 700.0f
-#define MAX_ZOOM_VELOCITY 150.0f
+#define MAX_PAN_VELOCITY 1500.0f
+#define MAX_TILT_VELOCITY 1500.0f
+#define MAX_ZOOM_VELOCITY 130.0f
 
 #endif // STEPPER_LIMITS_H
