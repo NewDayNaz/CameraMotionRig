@@ -66,10 +66,11 @@ static void serial_task(void* pvParameters) {
                     
                 case CMD_JOYSTICK:
                     // Convert joystick values (-32768 to 32768) to velocities
+                    // Note: stepper_simple_set_velocities will apply max velocity limits
                     const float JOYSTICK_MAX = 32768.0f;
-                    const float MAX_VEL_PAN = 500.0f;   // Full steps/sec (increased for better responsiveness)
-                    const float MAX_VEL_TILT = 500.0f;  // Full steps/sec (increased for better responsiveness)
-                    const float MAX_VEL_ZOOM = 100.0f;   // Full steps/sec
+                    const float MAX_VEL_PAN = 500.0f;   
+                    const float MAX_VEL_TILT = 500.0f;  
+                    const float MAX_VEL_ZOOM = 100.0f;   
                     
                     float pan_vel = (cmd.velocities[0] / JOYSTICK_MAX) * MAX_VEL_PAN;
                     float tilt_vel = (cmd.velocities[1] / JOYSTICK_MAX) * MAX_VEL_TILT;

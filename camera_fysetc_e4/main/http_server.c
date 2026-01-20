@@ -5,13 +5,14 @@
 
 #include "http_server.h"
 #include "stepper_simple.h"
+#include "stepper_limits.h"
 #include "preset_storage.h"
 #include "wifi_manager.h"
 
-// Maximum velocities for web UI (steps/sec)
-#define MAX_VELOCITY_PAN  500.0f  // Increased for better responsiveness
-#define MAX_VELOCITY_TILT 500.0f  // Increased for better responsiveness
-#define MAX_VELOCITY_ZOOM 100.0f
+// Maximum velocities for web UI (steps/sec) - use limits from stepper_limits.h
+#define MAX_VELOCITY_PAN  MAX_PAN_VELOCITY
+#define MAX_VELOCITY_TILT MAX_TILT_VELOCITY
+#define MAX_VELOCITY_ZOOM MAX_ZOOM_VELOCITY
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "cJSON.h"

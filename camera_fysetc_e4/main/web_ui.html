@@ -149,8 +149,9 @@ let updatePosInterval;
 let joystickXYActive = false;
 let joystickZActive = false;
 let currentVelocities = {pan: 0, tilt: 0, zoom: 0};
-const MAX_VELOCITY = 500;
-const MAX_VELOCITY_ZOOM = 50;
+// These values will be replaced by embed_html.py from stepper_limits.h
+const MAX_VELOCITY = {{MAX_PAN_VELOCITY}};
+const MAX_VELOCITY_ZOOM = {{MAX_ZOOM_VELOCITY}};
 function updatePositions() {
   const posEl = document.getElementById('positions');
   if (!posEl) {
