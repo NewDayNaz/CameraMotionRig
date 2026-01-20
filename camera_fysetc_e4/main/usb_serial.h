@@ -75,22 +75,5 @@ void usb_serial_send_position(float pan, float tilt, float zoom);
  */
 void usb_serial_send_status(const char* status);
 
-/**
- * @brief Serial message entry for logging
- */
-typedef struct {
-    int64_t timestamp_ms;  // Timestamp in milliseconds
-    char message[128];     // Message text
-    bool is_command;       // true if incoming command, false if outgoing response
-} serial_message_t;
-
-/**
- * @brief Get recent serial messages
- * @param messages Output array of messages
- * @param max_messages Maximum number of messages to return
- * @return Number of messages returned
- */
-int usb_serial_get_messages(serial_message_t* messages, int max_messages);
-
 #endif // USB_SERIAL_H
 

@@ -25,11 +25,6 @@ button { padding: 10px 20px; margin: 5px; font-size: 16px; cursor: pointer; bord
 .status-info { background: #e3f2fd; color: #1976d2; }
 .status-success { background: #e8f5e9; color: #388e3c; }
 #positions { font-family: monospace; font-size: 18px; }
-.console { background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 5px; font-family: 'Courier New', monospace; font-size: 12px; max-height: 300px; overflow-y: auto; margin: 10px 0; }
-.console-line { margin: 2px 0; padding: 2px 0; }
-.console-command { color: #4ec9b0; }
-.console-response { color: #ce9178; }
-.console-timestamp { color: #808080; font-size: 10px; margin-right: 8px; }
 .preset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin: 10px 0; }
 .preset-btn { padding: 15px; font-size: 14px; position: relative; }
 .preset-edit-btn { position: absolute; top: 2px; right: 2px; padding: 2px 6px; font-size: 10px; background: rgba(0,0,0,0.5); color: white; border: none; border-radius: 3px; cursor: pointer; }
@@ -60,12 +55,6 @@ button { padding: 10px 20px; margin: 5px; font-size: 16px; cursor: pointer; bord
 <div class="section">
 <h2>Position Status</h2>
 <div id="positions" class="status status-info">Loading...</div>
-</div>
-<div class="section">
-<h2>Serial Command Log</h2>
-<p style="color: #666; font-size: 12px; margin-bottom: 10px;">Shows recent commands from Raspberry Pi and responses</p>
-<div id="serial_console" class="console"></div>
-<button class="btn-secondary" onclick="clearSerialLog()" style="margin-top: 5px;">Clear Log</button>
 </div>
 <div class="section">
 <h2>Joystick Control</h2>
@@ -157,13 +146,11 @@ Decel Factor: &gt;1.0 = gentler deceleration (more accurate), &lt;1.0 = sharper 
 <script>
 let precisionMode = false;
 let updatePosInterval;
-let updateSerialLogInterval;
 let joystickXYActive = false;
 let joystickZActive = false;
 let currentVelocities = {pan: 0, tilt: 0, zoom: 0};
 const MAX_VELOCITY = 500;
 const MAX_VELOCITY_ZOOM = 50;
-let serialLogMessages = [];
 function updatePositions() {
   const posEl = document.getElementById('positions');
   if (!posEl) {
@@ -559,81 +546,10 @@ function uploadFirmware() {
     }
   });
 }
-function formatTimestamp(timestampMs) {
-  // Timestamp is milliseconds since boot, not epoch time
-  // Format as HH:MM:SS.mmm relative to boot
-  const totalSeconds = Math.floor(timestampMs / 1000);
-  const ms = timestampMs % 1000;
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(ms).padStart(3, '0')}`;
-}
-function updateSerialLog() {
-  const consoleEl = document.getElementById('serial_console');
-  if (!consoleEl) return;
-  
-  fetch('/api/serial/log').then(r => {
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    return r.json();
-  }).then(data => {
-    if (data && data.messages && Array.isArray(data.messages)) {
-      // Only update if we have new messages (check by timestamp)
-      let hasNewMessages = false;
-      if (serialLogMessages.length === 0 || 
-          (data.messages.length > 0 && 
-           data.messages[data.messages.length - 1].timestamp_ms !== 
-           serialLogMessages[serialLogMessages.length - 1].timestamp_ms)) {
-        hasNewMessages = true;
-      }
-      
-      if (hasNewMessages) {
-        serialLogMessages = data.messages;
-        renderSerialLog();
-        // Auto-scroll to bottom
-        consoleEl.scrollTop = consoleEl.scrollHeight;
-      }
-    }
-  }).catch(e => {
-    console.error('Failed to fetch serial log:', e);
-  });
-}
-function renderSerialLog() {
-  const consoleEl = document.getElementById('serial_console');
-  if (!consoleEl) return;
-  
-  if (serialLogMessages.length === 0) {
-    consoleEl.innerHTML = '<div class="console-line" style="color: #808080;">No messages yet...</div>';
-    return;
-  }
-  
-  let html = '';
-  // Show most recent messages first (reverse order)
-  for (let i = serialLogMessages.length - 1; i >= 0; i--) {
-    const msg = serialLogMessages[i];
-    const timestamp = formatTimestamp(msg.timestamp_ms);
-    const cssClass = msg.is_command ? 'console-command' : 'console-response';
-    const prefix = msg.is_command ? '→' : '←';
-    html += `<div class="console-line">
-      <span class="console-timestamp">${timestamp}</span>
-      <span class="${cssClass}">${prefix} ${msg.message}</span>
-    </div>`;
-  }
-  consoleEl.innerHTML = html;
-}
-function clearSerialLog() {
-  serialLogMessages = [];
-  const consoleEl = document.getElementById('serial_console');
-  if (consoleEl) {
-    consoleEl.innerHTML = '<div class="console-line" style="color: #808080;">Log cleared...</div>';
-  }
-}
 setTimeout(function() {
   try {
     updatePositions();
     updatePosInterval = setInterval(updatePositions, 500);
-    updateSerialLog();
-    updateSerialLogInterval = setInterval(updateSerialLog, 500);
     createPresetButtons();
   } catch (e) {
     console.error('Initialization error:', e);
