@@ -1,9 +1,9 @@
 /**
  * @file stepper_executor.h
- * @brief Deterministic step generation using GPTimer ISR
+ * @brief Simplified stepper executor with direct velocity control
  * 
- * Uses ESP-IDF GPTimer to generate step pulses at high frequency (20-40kHz).
- * Executes segments from the queue using DDA/Bresenham style distribution.
+ * Uses ESP-IDF GPTimer ISR for responsive joystick control.
+ * Supports both direct velocity control (manual mode) and segment queue (preset moves).
  */
 
 #ifndef STEPPER_EXECUTOR_H
@@ -15,7 +15,7 @@
 
 /**
  * @brief Initialize the stepper executor
- * @param queue Pointer to the segment queue to consume from
+ * @param queue Pointer to the segment queue (for preset moves, can be NULL if only using manual mode)
  * @return true on success, false on failure
  */
 bool stepper_executor_init(segment_queue_t* queue);
@@ -29,6 +29,19 @@ void stepper_executor_start(void);
  * @brief Stop the stepper executor timer
  */
 void stepper_executor_stop(void);
+
+/**
+ * @brief Set velocity for manual/joystick mode (direct control, bypasses queue)
+ * @param axis Axis index (0=PAN, 1=TILT, 2=ZOOM)
+ * @param velocity Velocity in steps/second (can be negative for reverse)
+ */
+void stepper_executor_set_velocity(uint8_t axis, float velocity);
+
+/**
+ * @brief Enable/disable manual velocity mode
+ * @param enabled true to enable manual mode, false to use segment queue
+ */
+void stepper_executor_set_manual_mode(bool enabled);
 
 /**
  * @brief Get current position of an axis

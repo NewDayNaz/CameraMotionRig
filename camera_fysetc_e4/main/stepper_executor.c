@@ -50,20 +50,111 @@ static struct {
     
     // Step pulse state (toggle each ISR tick)
     bool step_pulse_state[NUM_AXES];
+    
+    // Direct velocity control for manual/joystick mode
+    bool manual_mode;
+    float target_velocities[NUM_AXES];  // Target velocities in steps/second
+    float velocity_accum[NUM_AXES];     // Fractional step accumulator for smooth motion
 } executor_state;
 
 // GPTimer handle
 static gptimer_handle_t gptimer = NULL;
 
 /**
+ * @brief Generate a step for an axis (IRAM-safe helper)
+ */
+static inline void IRAM_ATTR generate_step(uint8_t axis, int32_t direction) {
+    gpio_num_t dir_pin = dir_pins[axis];
+    gpio_num_t step_pin = step_pins[axis];
+    
+    // Set direction (only on rising edge of step pulse)
+    if (!executor_state.step_pulse_state[axis]) {
+        // Invert direction for PAN and TILT axes if needed
+        int32_t dir = direction;
+        if (axis == AXIS_PAN || axis == AXIS_TILT) {
+            dir = -dir;
+        }
+        
+        // GPIO32-39 use GPIO_OUT1 registers
+        if (dir_pin >= 32) {
+            if (dir > 0) {
+                REG_WRITE(GPIO_OUT1_W1TS_REG, (1ULL << (dir_pin - 32)));
+            } else {
+                REG_WRITE(GPIO_OUT1_W1TC_REG, (1ULL << (dir_pin - 32)));
+            }
+        } else {
+            if (dir > 0) {
+                REG_WRITE(GPIO_OUT_W1TS_REG, (1ULL << dir_pin));
+            } else {
+                REG_WRITE(GPIO_OUT_W1TC_REG, (1ULL << dir_pin));
+            }
+        }
+    }
+    
+    // Generate step pulse (toggle)
+    executor_state.step_pulse_state[axis] = !executor_state.step_pulse_state[axis];
+    
+    if (step_pin >= 32) {
+        if (executor_state.step_pulse_state[axis]) {
+            REG_WRITE(GPIO_OUT1_W1TS_REG, (1ULL << (step_pin - 32)));
+        } else {
+            REG_WRITE(GPIO_OUT1_W1TC_REG, (1ULL << (step_pin - 32)));
+            // Step complete - update position
+            executor_state.positions[axis] += direction;
+        }
+    } else {
+        if (executor_state.step_pulse_state[axis]) {
+            REG_WRITE(GPIO_OUT_W1TS_REG, (1ULL << step_pin));
+        } else {
+            REG_WRITE(GPIO_OUT_W1TC_REG, (1ULL << step_pin));
+            // Step complete - update position
+            executor_state.positions[axis] += direction;
+        }
+    }
+}
+
+/**
  * @brief GPTimer ISR callback - executes step pulses
  */
 static bool IRAM_ATTR timer_isr_callback(gptimer_handle_t timer, const gptimer_alarm_event_data_t* edata, void* user_data) {
+    // Manual/joystick mode: direct velocity control
+    if (executor_state.manual_mode) {
+        // ISR frequency is 40kHz = 40000 ticks/sec
+        // dt per tick = 1/40000 = 0.000025 seconds
+        const float dt = 1.0f / ISR_FREQUENCY_HZ;
+        
+        for (int axis = 0; axis < NUM_AXES; axis++) {
+            float velocity = executor_state.target_velocities[axis];
+            if (velocity != 0.0f) {
+                // Accumulate fractional steps
+                executor_state.velocity_accum[axis] += velocity * dt;
+                
+                // Extract integer steps
+                int32_t steps = (int32_t)executor_state.velocity_accum[axis];
+                if (steps != 0) {
+                    executor_state.velocity_accum[axis] -= (float)steps;
+                    
+                    // Generate steps (1 step at a time for smooth motion)
+                    int32_t direction = (steps > 0) ? 1 : -1;
+                    int32_t step_count = (steps > 0) ? steps : -steps;
+                    for (int i = 0; i < step_count; i++) {
+                        generate_step(axis, direction);
+                    }
+                }
+            } else {
+                // Zero velocity - reset accumulator
+                executor_state.velocity_accum[axis] = 0.0f;
+            }
+        }
+        return false;
+    }
+    
+    // Preset move mode: execute segments from queue
     bool need_yield = false;
     
     // If no segment is active, try to get one from queue
     if (!executor_state.has_segment) {
-        if (segment_queue_pop(executor_state.queue, &executor_state.current_segment)) {
+        if (executor_state.queue && segment_queue_pop(executor_state.queue, &executor_state.current_segment)) {
             executor_state.has_segment = true;
             
             // Calculate segment duration in ISR ticks
@@ -112,57 +203,10 @@ static bool IRAM_ATTR timer_isr_callback(gptimer_handle_t timer, const gptimer_a
                 
                 if (executor_state.accum[axis] >= (int32_t)executor_state.segment_ticks_total) {
                     // Time to emit a step
+                    generate_step(axis, executor_state.step_direction[axis]);
                     
-                    // Set direction pin using direct register access (IRAM-safe)
-                    // Only set direction when starting a new step (when pulse state is false)
-                    if (!executor_state.step_pulse_state[axis]) {
-                        gpio_num_t dir_pin = dir_pins[axis];
-                        // Invert direction for PAN and TILT axes to fix directional issues
-                        int32_t dir = executor_state.step_direction[axis];
-                        if (axis == AXIS_PAN || axis == AXIS_TILT) {
-                            dir = -dir;  // Invert PAN and TILT direction
-                        }
-                        // GPIO32-39 use different registers (GPIO_OUT1) on ESP32
-                        if (dir_pin >= 32) {
-                            if (dir > 0) {
-                                REG_WRITE(GPIO_OUT1_W1TS_REG, (1ULL << (dir_pin - 32)));
-                            } else {
-                                REG_WRITE(GPIO_OUT1_W1TC_REG, (1ULL << (dir_pin - 32)));
-                            }
-                        } else {
-                        if (dir > 0) {
-                            REG_WRITE(GPIO_OUT_W1TS_REG, (1ULL << dir_pin));
-                        } else {
-                            REG_WRITE(GPIO_OUT_W1TC_REG, (1ULL << dir_pin));
-                            }
-                        }
-                    }
-                    
-                    // Generate step pulse (toggle) using direct register access (IRAM-safe)
-                    executor_state.step_pulse_state[axis] = !executor_state.step_pulse_state[axis];
-                    gpio_num_t step_pin = step_pins[axis];
-                    // GPIO32-39 use different registers (GPIO_OUT1) on ESP32
-                    if (step_pin >= 32) {
-                        if (executor_state.step_pulse_state[axis]) {
-                            REG_WRITE(GPIO_OUT1_W1TS_REG, (1ULL << (step_pin - 32)));
-                        } else {
-                            REG_WRITE(GPIO_OUT1_W1TC_REG, (1ULL << (step_pin - 32)));
-                            // Step pulse complete - update position and decrement
-                            executor_state.positions[axis] += executor_state.step_direction[axis];
-                            executor_state.steps_remaining[axis]--;
-                        }
-                    } else {
-                    if (executor_state.step_pulse_state[axis]) {
-                        REG_WRITE(GPIO_OUT_W1TS_REG, (1ULL << step_pin));
-                    } else {
-                        REG_WRITE(GPIO_OUT_W1TC_REG, (1ULL << step_pin));
-                        // Step pulse complete - update position and decrement
-                        executor_state.positions[axis] += executor_state.step_direction[axis];
-                        executor_state.steps_remaining[axis]--;
-                        }
-                    }
-                    
-                    // Subtract segment ticks from accumulator
+                    // Update counters
+                    executor_state.steps_remaining[axis]--;
                     executor_state.accum[axis] -= executor_state.segment_ticks_total;
                 }
             }
@@ -180,10 +224,13 @@ static bool IRAM_ATTR timer_isr_callback(gptimer_handle_t timer, const gptimer_a
 bool stepper_executor_init(segment_queue_t* queue) {
     memset(&executor_state, 0, sizeof(executor_state));
     executor_state.queue = queue;
+    executor_state.manual_mode = false;
     
-    // Initialize positions
+    // Initialize positions and velocities
     for (int i = 0; i < NUM_AXES; i++) {
         executor_state.positions[i] = 0;
+        executor_state.target_velocities[i] = 0.0f;
+        executor_state.velocity_accum[i] = 0.0f;
     }
     
     // Configure GPTimer
@@ -252,6 +299,23 @@ void stepper_executor_stop(void) {
     }
 }
 
+void stepper_executor_set_velocity(uint8_t axis, float velocity) {
+    if (axis < NUM_AXES) {
+        executor_state.target_velocities[axis] = velocity;
+    }
+}
+
+void stepper_executor_set_manual_mode(bool enabled) {
+    executor_state.manual_mode = enabled;
+    if (!enabled) {
+        // Reset velocities when leaving manual mode
+        for (int i = 0; i < NUM_AXES; i++) {
+            executor_state.target_velocities[i] = 0.0f;
+            executor_state.velocity_accum[i] = 0.0f;
+        }
+    }
+}
+
 int32_t stepper_executor_get_position(uint8_t axis) {
     if (axis >= NUM_AXES) {
         return 0;
@@ -266,6 +330,15 @@ void stepper_executor_set_position(uint8_t axis, int32_t position) {
 }
 
 bool stepper_executor_is_busy(void) {
-    return executor_state.has_segment || !segment_queue_is_empty(executor_state.queue);
+    if (executor_state.manual_mode) {
+        // Check if any velocity is non-zero
+        for (int i = 0; i < NUM_AXES; i++) {
+            if (executor_state.target_velocities[i] != 0.0f) {
+                return true;
+            }
+        }
+        return false;
+    }
+    return executor_state.has_segment || (executor_state.queue && !segment_queue_is_empty(executor_state.queue));
 }
 
