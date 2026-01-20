@@ -1,6 +1,6 @@
 {
   "dependencies": {
     "easymidi": "^3.0.1",
-    "request": "^2.88.2"
+    "axios": "^1.6.0"
   }
 }
