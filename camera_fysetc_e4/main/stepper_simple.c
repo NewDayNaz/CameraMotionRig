@@ -45,6 +45,7 @@ static float preset_decel_start_distance[3]; // Distance at which to start decel
 // Constants
 #define MIN_STEP_DELAY_US 250  // Minimum step delay (max speed ~2000 steps/sec)
 #define PRECISION_MULTIPLIER 0.25f  // Precision mode speed multiplier
+#define MIN_ZOOM_VELOCITY 10.0f  // Minimum zoom velocity (steps/sec) to prevent stalling
 
 // Helper function to convert velocity to step delay
 static uint32_t velocity_to_step_delay(float velocity) {
@@ -160,6 +161,14 @@ void stepper_simple_update(void) {
                 } else {
                     // Cruise zone - maintain max speed
                     target_vel = max_vel;
+                }
+                
+                // Apply minimum velocity to zoom axis for preset moves
+                // (but allow stopping when very close to target)
+                if (i == AXIS_ZOOM && remaining_abs > 1.0f) {
+                    if (fabsf(target_vel) < MIN_ZOOM_VELOCITY) {
+                        target_vel = (target_vel >= 0) ? MIN_ZOOM_VELOCITY : -MIN_ZOOM_VELOCITY;
+                    }
                 }
                 
                 // Set direction and target velocity
@@ -284,7 +293,14 @@ void stepper_simple_set_velocities(float pan_vel, float tilt_vel, float zoom_vel
     
     axes[AXIS_PAN].target_velocity = pan_vel;
     axes[AXIS_TILT].target_velocity = tilt_vel;
-    axes[AXIS_ZOOM].target_velocity = zoom_vel;
+    
+    // Apply minimum velocity to zoom axis (but allow zero for stopping)
+    if (fabsf(zoom_vel) > 0.1f && fabsf(zoom_vel) < MIN_ZOOM_VELOCITY) {
+        // Clamp to minimum velocity with correct sign
+        axes[AXIS_ZOOM].target_velocity = (zoom_vel > 0) ? MIN_ZOOM_VELOCITY : -MIN_ZOOM_VELOCITY;
+    } else {
+        axes[AXIS_ZOOM].target_velocity = zoom_vel;
+    }
 }
 
 void stepper_simple_get_positions(float* pan, float* tilt, float* zoom) {
