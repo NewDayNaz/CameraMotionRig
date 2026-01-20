@@ -1,6 +1,6 @@
 /**
  * @file motion_controller.h
- * @brief Simplified motion controller with direct velocity control
+ * @brief High-level motion controller coordinating planner, executor, and homing
  */
 
 #ifndef MOTION_CONTROLLER_H
@@ -8,6 +8,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "motion_planner.h"
 #include "homing.h"
 #include "preset_storage.h"
 

@@ -29,19 +29,19 @@
 
 static const char* TAG = "main";
 
-#define UPDATE_TASK_PERIOD_MS 1  // 1ms update period = 1kHz for responsive joystick control
+#define UPDATE_TASK_PERIOD_MS 10  // 10ms update period = 100Hz
 #define UPDATE_TASK_STACK_SIZE 4096
 #define UPDATE_TASK_PRIORITY 5
 
 #define SERIAL_TASK_STACK_SIZE 4096
 #define SERIAL_TASK_PRIORITY 3
 
-// Update task - runs motion controller updates at 1kHz for responsive control
+// Update task - runs motion controller and planner updates
 static void update_task(void* pvParameters) {
     const TickType_t xDelay = pdMS_TO_TICKS(UPDATE_TASK_PERIOD_MS);
     float dt = UPDATE_TASK_PERIOD_MS / 1000.0f;
     
-    ESP_LOGI(TAG, "Update task started (1kHz)");
+    ESP_LOGI(TAG, "Update task started");
     
     while (1) {
         motion_controller_update(dt);
