@@ -14,8 +14,8 @@
 #define MIN_ZOOM_VELOCITY 10.0f
 
 // Maximum velocities to prevent step skipping (steps/sec)
-#define MAX_PAN_VELOCITY 1500.0f
-#define MAX_TILT_VELOCITY 1500.0f
+#define MAX_PAN_VELOCITY 1200.0f
+#define MAX_TILT_VELOCITY 1200.0f
 #define MAX_ZOOM_VELOCITY 130.0f
 
 #endif // STEPPER_LIMITS_H
