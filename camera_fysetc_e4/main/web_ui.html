@@ -25,6 +25,11 @@ button { padding: 10px 20px; margin: 5px; font-size: 16px; cursor: pointer; bord
 .status-info { background: #e3f2fd; color: #1976d2; }
 .status-success { background: #e8f5e9; color: #388e3c; }
 #positions { font-family: monospace; font-size: 18px; }
+.console { background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 5px; font-family: 'Courier New', monospace; font-size: 12px; max-height: 300px; overflow-y: auto; margin: 10px 0; }
+.console-line { margin: 2px 0; padding: 2px 0; }
+.console-command { color: #4ec9b0; }
+.console-response { color: #ce9178; }
+.console-timestamp { color: #808080; font-size: 10px; margin-right: 8px; }
 .preset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin: 10px 0; }
 .preset-btn { padding: 15px; font-size: 14px; position: relative; }
 .preset-edit-btn { position: absolute; top: 2px; right: 2px; padding: 2px 6px; font-size: 10px; background: rgba(0,0,0,0.5); color: white; border: none; border-radius: 3px; cursor: pointer; }
@@ -55,6 +60,12 @@ button { padding: 10px 20px; margin: 5px; font-size: 16px; cursor: pointer; bord
 <div class="section">
 <h2>Position Status</h2>
 <div id="positions" class="status status-info">Loading...</div>
+</div>
+<div class="section">
+<h2>Serial Command Log</h2>
+<p style="color: #666; font-size: 12px; margin-bottom: 10px;">Shows recent commands from Raspberry Pi and responses</p>
+<div id="serial_console" class="console"></div>
+<button class="btn-secondary" onclick="clearSerialLog()" style="margin-top: 5px;">Clear Log</button>
 </div>
 <div class="section">
 <h2>Joystick Control</h2>
@@ -125,30 +136,15 @@ button { padding: 10px 20px; margin: 5px; font-size: 16px; cursor: pointer; bord
 <div class="form-group">
 <h3>Motion Parameters</h3>
 <div class="form-row">
-<div><label>Duration (s, 0=auto):</label><input type="number" id="editor_duration" min="0" step="0.1"></div>
-<div><label>Max Speed Scale:</label><input type="number" id="editor_speed_scale" min="0" step="0.1"></div>
+<div><label>Max Speed (0=auto):</label><input type="number" id="editor_max_speed" min="0" step="10" value="0"></div>
+<div><label>Accel Factor:</label><input type="number" id="editor_accel_factor" min="0.1" max="10" step="0.1" value="1.0"></div>
+<div><label>Decel Factor:</label><input type="number" id="editor_decel_factor" min="0.1" max="10" step="0.1" value="1.0"></div>
 </div>
-<div class="form-row">
-<div><label>Speed Multiplier:</label><input type="number" id="editor_speed_mult" min="0.1" max="10" step="0.1" value="1.0"></div>
-<div><label>Accel Multiplier:</label><input type="number" id="editor_accel_mult" min="0.1" max="10" step="0.1" value="1.0"></div>
-</div>
-<div><label>Easing Type:</label>
-<select id="editor_easing">
-<option value="0">Linear</option>
-<option value="1">Smootherstep</option>
-<option value="2">Sigmoid</option>
-</select></div>
-<div><label>Approach Mode:</label>
-<select id="editor_approach">
-<option value="0">Direct</option>
-<option value="1">Home First</option>
-<option value="2">Safe Route</option>
-</select></div>
-</div>
-<div class="form-group">
-<h3>Advanced</h3>
-<div><label>Arrival Overshoot:</label><input type="number" id="editor_overshoot" min="0" max="0.01" step="0.001"></div>
-<div><label><input type="checkbox" id="editor_precision"> Precision Preferred</label></div>
+<p style="color: #666; font-size: 12px; margin-top: 10px;">
+Max Speed: steps/sec (0 = auto-calculate based on distance)<br>
+Accel Factor: &gt;1.0 = faster acceleration, &lt;1.0 = slower<br>
+Decel Factor: &gt;1.0 = gentler deceleration (more accurate), &lt;1.0 = sharper decel (faster stop)
+</p>
 </div>
 <div style="margin-top: 20px; text-align: right;">
 <button type="button" class="btn-secondary" onclick="closePresetEditor()">Cancel</button>
@@ -161,11 +157,13 @@ button { padding: 10px 20px; margin: 5px; font-size: 16px; cursor: pointer; bord
 <script>
 let precisionMode = false;
 let updatePosInterval;
+let updateSerialLogInterval;
 let joystickXYActive = false;
 let joystickZActive = false;
 let currentVelocities = {pan: 0, tilt: 0, zoom: 0};
 const MAX_VELOCITY = 500;
 const MAX_VELOCITY_ZOOM = 50;
+let serialLogMessages = [];
 function updatePositions() {
   const posEl = document.getElementById('positions');
   if (!posEl) {
@@ -455,25 +453,13 @@ function openPresetEditor(idx) {
       document.getElementById('editor_pos_tilt').value = p.pos[1] || 0;
       document.getElementById('editor_pos_zoom').value = p.pos[2] || 0;
       document.getElementById('editor_duration').value = p.duration_s || 0;
-      document.getElementById('editor_speed_scale').value = p.max_speed_scale || 0;
       document.getElementById('editor_speed_mult').value = p.speed_multiplier || 1.0;
-      document.getElementById('editor_accel_mult').value = p.accel_multiplier || 1.0;
-      document.getElementById('editor_easing').value = p.easing_type || 0;
-      document.getElementById('editor_approach').value = p.approach_mode || 0;
-      document.getElementById('editor_overshoot').value = p.arrival_overshoot || 0;
-      document.getElementById('editor_precision').checked = p.precision_preferred || false;
     } else {
       document.getElementById('editor_pos_pan').value = 0;
       document.getElementById('editor_pos_tilt').value = 0;
       document.getElementById('editor_pos_zoom').value = 0;
       document.getElementById('editor_duration').value = 0;
-      document.getElementById('editor_speed_scale').value = 0;
       document.getElementById('editor_speed_mult').value = 1.0;
-      document.getElementById('editor_accel_mult').value = 1.0;
-      document.getElementById('editor_easing').value = 1;
-      document.getElementById('editor_approach').value = 0;
-      document.getElementById('editor_overshoot').value = 0;
-      document.getElementById('editor_precision').checked = false;
     }
   }).catch(e => {
     console.error('Failed to load preset:', e);
@@ -493,14 +479,9 @@ function savePresetEditor() {
       parseFloat(document.getElementById('editor_pos_tilt').value) || 0,
       parseFloat(document.getElementById('editor_pos_zoom').value) || 0
     ],
-    duration_s: parseFloat(document.getElementById('editor_duration').value) || 0,
-    max_speed_scale: parseFloat(document.getElementById('editor_speed_scale').value) || 0,
-    speed_multiplier: parseFloat(document.getElementById('editor_speed_mult').value) || 1.0,
-    accel_multiplier: parseFloat(document.getElementById('editor_accel_mult').value) || 1.0,
-    easing_type: parseInt(document.getElementById('editor_easing').value) || 0,
-    approach_mode: parseInt(document.getElementById('editor_approach').value) || 0,
-    arrival_overshoot: parseFloat(document.getElementById('editor_overshoot').value) || 0,
-    precision_preferred: document.getElementById('editor_precision').checked,
+    max_speed: parseFloat(document.getElementById('editor_max_speed').value) || 0,
+    accel_factor: parseFloat(document.getElementById('editor_accel_factor').value) || 1.0,
+    decel_factor: parseFloat(document.getElementById('editor_decel_factor').value) || 1.0,
     valid: true
   };
   fetch('/api/preset/update', {
@@ -578,10 +559,81 @@ function uploadFirmware() {
     }
   });
 }
+function formatTimestamp(timestampMs) {
+  // Timestamp is milliseconds since boot, not epoch time
+  // Format as HH:MM:SS.mmm relative to boot
+  const totalSeconds = Math.floor(timestampMs / 1000);
+  const ms = timestampMs % 1000;
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(ms).padStart(3, '0')}`;
+}
+function updateSerialLog() {
+  const consoleEl = document.getElementById('serial_console');
+  if (!consoleEl) return;
+  
+  fetch('/api/serial/log').then(r => {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  }).then(data => {
+    if (data && data.messages && Array.isArray(data.messages)) {
+      // Only update if we have new messages (check by timestamp)
+      let hasNewMessages = false;
+      if (serialLogMessages.length === 0 || 
+          (data.messages.length > 0 && 
+           data.messages[data.messages.length - 1].timestamp_ms !== 
+           serialLogMessages[serialLogMessages.length - 1].timestamp_ms)) {
+        hasNewMessages = true;
+      }
+      
+      if (hasNewMessages) {
+        serialLogMessages = data.messages;
+        renderSerialLog();
+        // Auto-scroll to bottom
+        consoleEl.scrollTop = consoleEl.scrollHeight;
+      }
+    }
+  }).catch(e => {
+    console.error('Failed to fetch serial log:', e);
+  });
+}
+function renderSerialLog() {
+  const consoleEl = document.getElementById('serial_console');
+  if (!consoleEl) return;
+  
+  if (serialLogMessages.length === 0) {
+    consoleEl.innerHTML = '<div class="console-line" style="color: #808080;">No messages yet...</div>';
+    return;
+  }
+  
+  let html = '';
+  // Show most recent messages first (reverse order)
+  for (let i = serialLogMessages.length - 1; i >= 0; i--) {
+    const msg = serialLogMessages[i];
+    const timestamp = formatTimestamp(msg.timestamp_ms);
+    const cssClass = msg.is_command ? 'console-command' : 'console-response';
+    const prefix = msg.is_command ? '→' : '←';
+    html += `<div class="console-line">
+      <span class="console-timestamp">${timestamp}</span>
+      <span class="${cssClass}">${prefix} ${msg.message}</span>
+    </div>`;
+  }
+  consoleEl.innerHTML = html;
+}
+function clearSerialLog() {
+  serialLogMessages = [];
+  const consoleEl = document.getElementById('serial_console');
+  if (consoleEl) {
+    consoleEl.innerHTML = '<div class="console-line" style="color: #808080;">Log cleared...</div>';
+  }
+}
 setTimeout(function() {
   try {
     updatePositions();
     updatePosInterval = setInterval(updatePositions, 500);
+    updateSerialLog();
+    updateSerialLogInterval = setInterval(updateSerialLog, 500);
     createPresetButtons();
   } catch (e) {
     console.error('Initialization error:', e);

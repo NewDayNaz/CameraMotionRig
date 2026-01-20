@@ -6,12 +6,13 @@
 #include "http_server.h"
 #include "stepper_simple.h"
 #include "preset_storage.h"
+#include "usb_serial.h"
 #include "wifi_manager.h"
 
 // Maximum velocities for web UI (steps/sec)
 #define MAX_VELOCITY_PAN  500.0f  // Increased for better responsiveness
 #define MAX_VELOCITY_TILT 500.0f  // Increased for better responsiveness
-#define MAX_VELOCITY_ZOOM 50.0f
+#define MAX_VELOCITY_ZOOM 100.0f
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "cJSON.h"
@@ -364,14 +365,9 @@ static esp_err_t api_preset_get_handler(httpd_req_t *req) {
         }
         cJSON_AddItemToObject(preset_json, "pos", pos_array);
         
-        cJSON_AddNumberToObject(preset_json, "duration_s", preset.duration_s);
-        cJSON_AddNumberToObject(preset_json, "max_speed_scale", preset.max_speed_scale);
-        cJSON_AddNumberToObject(preset_json, "speed_multiplier", preset.speed_multiplier);
-        cJSON_AddNumberToObject(preset_json, "accel_multiplier", preset.accel_multiplier);
-        cJSON_AddNumberToObject(preset_json, "easing_type", preset.easing_type);
-        cJSON_AddNumberToObject(preset_json, "approach_mode", preset.approach_mode);
-        cJSON_AddNumberToObject(preset_json, "arrival_overshoot", preset.arrival_overshoot);
-        cJSON_AddBoolToObject(preset_json, "precision_preferred", preset.precision_preferred);
+        cJSON_AddNumberToObject(preset_json, "max_speed", preset.max_speed);
+        cJSON_AddNumberToObject(preset_json, "accel_factor", preset.accel_factor);
+        cJSON_AddNumberToObject(preset_json, "decel_factor", preset.decel_factor);
         cJSON_AddBoolToObject(preset_json, "valid", preset.valid);
         
         cJSON_AddItemToObject(response, "preset", preset_json);
@@ -454,29 +450,14 @@ static esp_err_t api_preset_update_handler(httpd_req_t *req) {
     
     // Parse other fields
     cJSON *item;
-    if ((item = cJSON_GetObjectItem(json, "duration_s")) != NULL && cJSON_IsNumber(item)) {
-        preset.duration_s = (float)item->valuedouble;
+    if ((item = cJSON_GetObjectItem(json, "max_speed")) != NULL && cJSON_IsNumber(item)) {
+        preset.max_speed = (float)item->valuedouble;
     }
-    if ((item = cJSON_GetObjectItem(json, "max_speed_scale")) != NULL && cJSON_IsNumber(item)) {
-        preset.max_speed_scale = (float)item->valuedouble;
+    if ((item = cJSON_GetObjectItem(json, "accel_factor")) != NULL && cJSON_IsNumber(item)) {
+        preset.accel_factor = (float)item->valuedouble;
     }
-    if ((item = cJSON_GetObjectItem(json, "speed_multiplier")) != NULL && cJSON_IsNumber(item)) {
-        preset.speed_multiplier = (float)item->valuedouble;
-    }
-    if ((item = cJSON_GetObjectItem(json, "accel_multiplier")) != NULL && cJSON_IsNumber(item)) {
-        preset.accel_multiplier = (float)item->valuedouble;
-    }
-    if ((item = cJSON_GetObjectItem(json, "easing_type")) != NULL && cJSON_IsNumber(item)) {
-        preset.easing_type = (easing_type_t)item->valueint;
-    }
-    if ((item = cJSON_GetObjectItem(json, "approach_mode")) != NULL && cJSON_IsNumber(item)) {
-        preset.approach_mode = (approach_mode_t)item->valueint;
-    }
-    if ((item = cJSON_GetObjectItem(json, "arrival_overshoot")) != NULL && cJSON_IsNumber(item)) {
-        preset.arrival_overshoot = (float)item->valuedouble;
-    }
-    if ((item = cJSON_GetObjectItem(json, "precision_preferred")) != NULL && cJSON_IsBool(item)) {
-        preset.precision_preferred = cJSON_IsTrue(item);
+    if ((item = cJSON_GetObjectItem(json, "decel_factor")) != NULL && cJSON_IsNumber(item)) {
+        preset.decel_factor = (float)item->valuedouble;
     }
     if ((item = cJSON_GetObjectItem(json, "valid")) != NULL && cJSON_IsBool(item)) {
         preset.valid = cJSON_IsTrue(item);
@@ -711,6 +692,45 @@ static esp_err_t api_update_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// Handler for /api/serial/log - GET serial command log
+static esp_err_t api_serial_log_handler(httpd_req_t *req) {
+    serial_message_t messages[100];
+    int count = usb_serial_get_messages(messages, 100);
+    
+    cJSON *json = cJSON_CreateObject();
+    cJSON *messages_array = cJSON_CreateArray();
+    
+    for (int i = 0; i < count; i++) {
+        cJSON *msg_obj = cJSON_CreateObject();
+        cJSON_AddNumberToObject(msg_obj, "timestamp_ms", messages[i].timestamp_ms);
+        cJSON_AddStringToObject(msg_obj, "message", messages[i].message);
+        cJSON_AddBoolToObject(msg_obj, "is_command", messages[i].is_command);
+        cJSON_AddItemToArray(messages_array, msg_obj);
+    }
+    
+    cJSON_AddItemToObject(json, "messages", messages_array);
+    cJSON_AddNumberToObject(json, "count", count);
+    
+    char *json_string = cJSON_Print(json);
+    if (json_string == NULL) {
+        cJSON_Delete(json);
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t ret = httpd_resp_send(req, json_string, strlen(json_string));
+    free(json_string);
+    cJSON_Delete(json);
+    
+    // Ignore connection reset errors
+    if (ret == ESP_ERR_HTTPD_RESP_SEND) {
+        return ESP_OK;
+    }
+    
+    return ret;
+}
+
 bool http_server_start(void) {
     // If server is already running, return success
     if (server_handle != NULL) {
@@ -719,7 +739,7 @@ bool http_server_start(void) {
     }
     
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 10;
+    config.max_uri_handlers = 11;  // Increased for serial log endpoint
     
     ESP_LOGI(TAG, "Starting HTTP server on port %d", config.server_port);
     
@@ -787,6 +807,13 @@ bool http_server_start(void) {
             .handler = api_update_handler,
         };
         httpd_register_uri_handler(server_handle, &update_uri);
+        
+        httpd_uri_t serial_log_uri = {
+            .uri = "/api/serial/log",
+            .method = HTTP_GET,
+            .handler = api_serial_log_handler,
+        };
+        httpd_register_uri_handler(server_handle, &serial_log_uri);
         
         ESP_LOGI(TAG, "HTTP server started");
         return true;

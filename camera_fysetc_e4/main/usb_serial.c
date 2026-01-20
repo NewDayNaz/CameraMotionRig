@@ -7,6 +7,9 @@
 #include "driver/uart.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -16,6 +19,35 @@ static const char* TAG = "usb_serial";
 #define BUF_SIZE 1024
 static char rx_buf[BUF_SIZE];
 static size_t rx_buf_len = 0;
+
+// Serial message log for web UI display
+#define MAX_LOG_MESSAGES 100
+static serial_message_t message_log[MAX_LOG_MESSAGES];
+static int message_log_head = 0;  // Next index to write
+static int message_log_count = 0; // Number of messages in log
+static portMUX_TYPE log_mutex = portMUX_INITIALIZER_UNLOCKED;
+
+// Helper function to add message to log
+static void usb_serial_log_message(const char* msg, bool is_command) {
+    portENTER_CRITICAL(&log_mutex);
+    
+    int64_t timestamp_ms = esp_timer_get_time() / 1000;  // Convert to milliseconds
+    
+    // Store message
+    int idx = message_log_head;
+    message_log[idx].timestamp_ms = timestamp_ms;
+    message_log[idx].is_command = is_command;
+    strncpy(message_log[idx].message, msg, sizeof(message_log[idx].message) - 1);
+    message_log[idx].message[sizeof(message_log[idx].message) - 1] = '\0';
+    
+    // Advance head (circular buffer)
+    message_log_head = (message_log_head + 1) % MAX_LOG_MESSAGES;
+    if (message_log_count < MAX_LOG_MESSAGES) {
+        message_log_count++;
+    }
+    
+    portEXIT_CRITICAL(&log_mutex);
+}
 
 // UART configuration - USB Serial uses UART0 typically
 #define UART_NUM UART_NUM_0
@@ -80,8 +112,13 @@ bool usb_serial_parse_command(parsed_cmd_t* cmd) {
     // Null terminate the line
     *line_end = '\0';
     
-    // Parse the command
+    // Store original command for logging (before parsing)
     char* line = rx_buf;
+    char command_copy[129];
+    strncpy(command_copy, line, sizeof(command_copy) - 1);
+    command_copy[sizeof(command_copy) - 1] = '\0';
+    
+    // Parse the command
     char* token;
     char* saveptr;
     
@@ -217,6 +254,11 @@ bool usb_serial_parse_command(parsed_cmd_t* cmd) {
         cmd->type = CMD_UNKNOWN;
     }
     
+    // Log incoming command (skip high-frequency commands that clutter the log)
+    if (cmd->type != CMD_VEL && cmd->type != CMD_JOYSTICK && cmd->type != CMD_STATUS) {
+        usb_serial_log_message(command_copy, true);
+    }
+    
     // Remove processed line from buffer
     size_t remaining = rx_buf_len - (line_end - rx_buf) - 1;
     if (remaining > 0) {
@@ -237,6 +279,22 @@ void usb_serial_send(const char* format, ...) {
     va_end(args);
     
     if (len > 0 && len < sizeof(buffer)) {
+        // Remove trailing newline for logging (keep it for UART)
+        char log_buffer[256];
+        strncpy(log_buffer, buffer, sizeof(log_buffer) - 1);
+        log_buffer[sizeof(log_buffer) - 1] = '\0';
+        // Remove trailing \n or \r\n
+        size_t log_len = strlen(log_buffer);
+        while (log_len > 0 && (log_buffer[log_len-1] == '\n' || log_buffer[log_len-1] == '\r')) {
+            log_buffer[log_len-1] = '\0';
+            log_len--;
+        }
+        
+        // Log outgoing response (skip STATUS responses as they're high-frequency)
+        if (strncmp(log_buffer, "STATUS:", 7) != 0) {
+            usb_serial_log_message(log_buffer, false);
+        }
+        
         uart_write_bytes(UART_NUM, buffer, len);
     }
 }
@@ -247,5 +305,25 @@ void usb_serial_send_position(float pan, float tilt, float zoom) {
 
 void usb_serial_send_status(const char* status) {
     usb_serial_send("STATUS:%s\n", status);
+}
+
+int usb_serial_get_messages(serial_message_t* messages, int max_messages) {
+    if (messages == NULL || max_messages <= 0) {
+        return 0;
+    }
+    
+    portENTER_CRITICAL(&log_mutex);
+    
+    int count = (message_log_count < max_messages) ? message_log_count : max_messages;
+    int start_idx = (message_log_count >= MAX_LOG_MESSAGES) ? message_log_head : 0;
+    
+    for (int i = 0; i < count; i++) {
+        int idx = (start_idx + i) % MAX_LOG_MESSAGES;
+        messages[i] = message_log[idx];
+    }
+    
+    portEXIT_CRITICAL(&log_mutex);
+    
+    return count;
 }
 

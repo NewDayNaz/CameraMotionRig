@@ -10,7 +10,7 @@
 #include <string.h>
 
 static const char* TAG = "preset_storage";
-static const char* NVS_NAMESPACE = "ptz_presets";
+static const char* NVS_NAMESPACE = "camera_presets_simple";  // Updated namespace for simplified format
 
 void preset_storage_init(void) {
     esp_err_t ret = nvs_flash_init();
@@ -171,14 +171,9 @@ void preset_init_default(preset_t* preset) {
     for (int i = 0; i < NUM_AXES; i++) {
         preset->pos[i] = 0.0f;
     }
-    preset->easing_type = EASING_LINEAR;
-    preset->duration_s = 6.0f;  // 6 second default
-    preset->max_speed_scale = 1.0f;  // Use duration
-    preset->arrival_overshoot = 0.0f;
-    preset->approach_mode = APPROACH_DIRECT;
-    preset->speed_multiplier = 0.5f;
-    preset->accel_multiplier = 1.0f;
-    preset->precision_preferred = false;
+    preset->max_speed = 0.0f;  // 0 = use default (calculated from distance)
+    preset->accel_factor = 1.0f;  // Normal acceleration
+    preset->decel_factor = 1.0f;  // Normal deceleration
     preset->valid = true;
 }
 

@@ -36,8 +36,11 @@ static bool preset_move_active = false;
 static uint8_t preset_move_index = 0;
 static float preset_target[3];
 static float preset_start[3];
-static int64_t preset_start_time;
-static float preset_duration = 6.0f;  // Default 6 seconds
+static float preset_max_speed[3];      // Max speed per axis (steps/sec)
+static float preset_accel_factor;      // Acceleration factor
+static float preset_decel_factor;      // Deceleration factor (most important for accuracy)
+static float preset_total_distance[3]; // Total distance to travel per axis
+static float preset_decel_start_distance[3]; // Distance at which to start decelerating
 
 // Constants
 #define MIN_STEP_DELAY_US 250  // Minimum step delay (max speed ~2000 steps/sec)
@@ -85,6 +88,13 @@ void stepper_simple_init(void) {
     homing_active = false;
     preset_move_active = false;
     
+    // Initialize preset move state
+    for (int i = 0; i < NUM_AXES; i++) {
+        preset_total_distance[i] = 0.0f;
+        preset_decel_start_distance[i] = 0.0f;
+        preset_max_speed[i] = 0.0f;
+    }
+    
     ESP_LOGI(TAG, "Simple stepper control initialized");
 }
 
@@ -95,38 +105,72 @@ void stepper_simple_update(void) {
     
     int64_t now_us = esp_timer_get_time();
     
-    // Handle preset moves
+    // Handle preset moves (distance-based with acceleration/deceleration)
     if (preset_move_active) {
-        int64_t elapsed_us = now_us - preset_start_time;
-        float elapsed_s = elapsed_us / 1000000.0f;
+        bool all_at_target = true;
         
-        if (elapsed_s >= preset_duration) {
-            // Move complete - set positions to target
-            for (int i = 0; i < NUM_AXES; i++) {
-                axes[i].position = (int32_t)preset_target[i];
-                axes[i].velocity = 0.0f;
+        for (int i = 0; i < NUM_AXES; i++) {
+            // Calculate remaining distance
+            float current_pos = (float)axes[i].position;
+            float remaining = preset_target[i] - current_pos;
+            float distance_traveled = preset_total_distance[i] - fabsf(remaining);
+            
+            // Check if at target
+            if (fabsf(remaining) < 0.5f) {
+                // At target - stop immediately
                 axes[i].target_velocity = 0.0f;
-                axes[i].move_direction = 0;
-                gpio_set_level(step_pins[i], 0);
+                axes[i].position = (int32_t)preset_target[i];  // Snap to exact target
+            } else {
+                all_at_target = false;
+                
+                // Distance-based velocity calculation with acceleration/deceleration zones
+                float remaining_abs = fabsf(remaining);
+                float max_vel = preset_max_speed[i];
+                
+                // Distance-based velocity with acceleration/deceleration zones
+                // Deceleration zone: percentage of total distance where we slow down
+                // Higher decel_factor = larger decel zone = gentler slowdown = more accurate positioning
+                // decel_factor of 1.0 = 30% of distance for decel, 2.0 = 50%, 3.0 = 60%, etc.
+                float decel_zone_percent = 0.3f * preset_decel_factor;  // Base 30% * factor
+                if (decel_zone_percent > 0.8f) decel_zone_percent = 0.8f;  // Cap at 80% max
+                float decel_zone_size = preset_total_distance[i] * decel_zone_percent;
+                
+                // Acceleration zone: start of movement where we ramp up
+                // Higher accel_factor = smaller accel zone = faster to max speed
+                // accel_factor of 1.0 = 20% of distance for accel, 2.0 = 10%, etc.
+                float accel_zone_percent = 0.2f / preset_accel_factor;  // Base 20% / factor
+                if (accel_zone_percent > 0.5f) accel_zone_percent = 0.5f;  // Cap at 50% max
+                float accel_zone_size = preset_total_distance[i] * accel_zone_percent;
+                float cruise_zone_start = accel_zone_size;
+                float decel_zone_start = preset_total_distance[i] - decel_zone_size;
+                
+                float target_vel;
+                if (remaining_abs <= decel_zone_size) {
+                    // Deceleration zone - reduce speed linearly as we approach target
+                    // This is most important for accurate positioning
+                    float speed_factor = remaining_abs / decel_zone_size;
+                    if (speed_factor < 0.05f) speed_factor = 0.05f;  // Minimum 5% speed for final approach
+                    target_vel = max_vel * speed_factor;
+                } else if (distance_traveled < accel_zone_size) {
+                    // Acceleration zone - ramp up speed (handled by slew rate limiting)
+                    // Could use linear ramp here if desired
+                    float speed_factor = distance_traveled / accel_zone_size;
+                    if (speed_factor < 0.2f) speed_factor = 0.2f;  // Start at 20% speed
+                    target_vel = max_vel * speed_factor;
+                } else {
+                    // Cruise zone - maintain max speed
+                    target_vel = max_vel;
+                }
+                
+                // Set direction and target velocity
+                axes[i].target_velocity = (remaining > 0) ? target_vel : -target_vel;
             }
+        }
+        
+        // Check if all axes are at target
+        if (all_at_target) {
             preset_move_active = false;
             ESP_LOGI(TAG, "Preset move complete");
-        } else {
-            // Interpolate positions using linear interpolation
-            float t = elapsed_s / preset_duration;
-            
-            for (int i = 0; i < NUM_AXES; i++) {
-                // Calculate velocity needed to reach target
-                float remaining = preset_target[i] - (float)axes[i].position;
-                float remaining_time = preset_duration - elapsed_s;
-                
-                if (fabsf(remaining) > 0.5f && remaining_time > 0.01f) {
-                    float required_vel = remaining / remaining_time;
-                    axes[i].target_velocity = required_vel;
-                } else {
-                    axes[i].target_velocity = 0.0f;
-                }
-            }
         }
     }
     
@@ -288,15 +332,47 @@ bool stepper_simple_goto_preset(uint8_t preset_index) {
     preset_target[1] = preset.pos[1];
     preset_target[2] = preset.pos[2];
     
-    // Use preset duration or default
-    preset_duration = (preset.duration_s > 0.0f) ? preset.duration_s : 6.0f;
-    
-    // Apply speed multiplier
-    if (preset.speed_multiplier > 0.0f && preset.speed_multiplier != 1.0f) {
-        preset_duration = preset_duration / preset.speed_multiplier;
+    // Calculate distances and max speeds for each axis
+    float max_distance = 0.0f;
+    for (int i = 0; i < NUM_AXES; i++) {
+        float distance = fabsf(preset_target[i] - preset_start[i]);
+        preset_total_distance[i] = distance;
+        if (distance > max_distance) {
+            max_distance = distance;
+        }
     }
     
-    preset_start_time = esp_timer_get_time();
+    // Calculate max speed for each axis (distance-based)
+    // If preset specifies max_speed, use it. Otherwise, calculate from distance.
+    float default_max_speed = 300.0f;  // Default max speed (steps/sec)
+    if (preset.max_speed > 0.0f) {
+        default_max_speed = preset.max_speed;
+    } else {
+        // Auto-calculate speed based on longest distance
+        // Longer moves get higher max speed, but cap at reasonable limit
+        if (max_distance > 1000.0f) {
+            default_max_speed = 400.0f;  // Faster for long moves
+        } else if (max_distance > 100.0f) {
+            default_max_speed = 300.0f;  // Medium speed
+        } else {
+            default_max_speed = 200.0f;  // Slower for short moves (more precision)
+        }
+    }
+    
+    // Set max speed for each axis (proportional to distance for coordinated motion)
+    for (int i = 0; i < NUM_AXES; i++) {
+        if (preset_total_distance[i] > 0.1f) {
+            // Scale speed by distance so all axes finish together
+            preset_max_speed[i] = default_max_speed * (preset_total_distance[i] / max_distance);
+        } else {
+            preset_max_speed[i] = 0.0f;
+        }
+    }
+    
+    // Store acceleration/deceleration factors
+    preset_accel_factor = preset.accel_factor;
+    preset_decel_factor = (preset.decel_factor > 0.1f) ? preset.decel_factor : 1.0f;  // Default to 1.0 if invalid
+    
     preset_move_active = true;
     preset_move_index = preset_index;
     
@@ -305,8 +381,10 @@ bool stepper_simple_goto_preset(uint8_t preset_index) {
         axes[i].target_velocity = 0.0f;
     }
     
-    ESP_LOGI(TAG, "Moving to preset %d: (%.1f, %.1f, %.1f) in %.2fs", 
-             preset_index, preset_target[0], preset_target[1], preset_target[2], preset_duration);
+    ESP_LOGI(TAG, "Moving to preset %d: (%.1f, %.1f, %.1f) from (%.1f, %.1f, %.1f), max_speed=%.1f, decel_factor=%.2f", 
+             preset_index, preset_target[0], preset_target[1], preset_target[2],
+             preset_start[0], preset_start[1], preset_start[2],
+             default_max_speed, preset_decel_factor);
     
     return true;
 }

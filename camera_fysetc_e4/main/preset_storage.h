@@ -2,12 +2,8 @@
  * @file preset_storage.h
  * @brief Preset storage using ESP32 NVS (Non-Volatile Storage)
  * 
- * Stores presets with cinematic parameters including:
- * - Position (pan, tilt, zoom)
- * - Easing type
- * - Duration or speed scale
- * - Arrival overshoot
- * - Approach mode
+ * Simplified preset storage for basic PTZ camera control.
+ * Stores positions and basic motion parameters.
  */
 
 #ifndef PRESET_STORAGE_H
@@ -21,37 +17,14 @@
 #define MAX_PRESETS 16
 
 /**
- * @brief Easing function type (simplified for preset storage)
- */
-typedef enum {
-    EASING_LINEAR,
-    EASING_SMOOTHERSTEP,  // Quintic smootherstep
-    EASING_SIGMOID
-} easing_type_t;
-
-/**
- * @brief Approach mode for preset moves
- */
-typedef enum {
-    APPROACH_DIRECT,      // Direct move to target
-    APPROACH_HOME_FIRST,  // Move to home, then to target
-    APPROACH_SAFE_ROUTE   // Safe route (e.g. lift tilt, pan, then tilt)
-} approach_mode_t;
-
-/**
- * @brief Preset structure
+ * @brief Preset structure (simplified)
  */
 typedef struct {
-    float pos[NUM_AXES];           // Target positions
-    easing_type_t easing_type;     // Easing for move
-    float duration_s;              // Move duration in seconds (0 = auto)
-    float max_speed_scale;         // Speed multiplier (0 = use duration)
-    float arrival_overshoot;       // Overshoot amount (0.0-0.01 typical)
-    approach_mode_t approach_mode; // How to approach this preset
-    float speed_multiplier;        // Per-preset speed multiplier
-    float accel_multiplier;        // Per-preset acceleration multiplier
-    bool precision_preferred;      // Prefer precision mode for this preset
-    bool valid;                    // Is this preset valid/initialized?
+    float pos[NUM_AXES];      // Target positions (pan, tilt, zoom)
+    float max_speed;          // Maximum speed for this move (steps/sec, 0 = use default)
+    float accel_factor;       // Acceleration factor (1.0 = normal, >1.0 = faster accel, <1.0 = slower accel)
+    float decel_factor;       // Deceleration factor (1.0 = normal, >1.0 = faster decel, <1.0 = slower decel) - most important for accuracy
+    bool valid;               // Is this preset valid/initialized?
 } preset_t;
 
 /**
