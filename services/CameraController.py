@@ -448,24 +448,6 @@ joy_bumper_r = 0
 joy_trigger_l = 0
 joy_trigger_r = 0
 
-
-def thread_function(name):
-    last_cmd = ""
-    cur_cmd = ""
-
-    while True:
-        with open("/home/pi/camera_async/send_cmd.txt", "r") as f:
-            cur_cmd = f.read().strip()
-            if cur_cmd != last_cmd and cur_cmd != "":
-                last_cmd = cur_cmd
-                print("send", cur_cmd)
-                send_cmd(bytes(cur_cmd, "ascii"))
-        time.sleep(0.05)
-
-
-x = threading.Thread(target=thread_function, args=(1,))
-x.start()
-
 # add zoom via triggers
 while True:
     try:

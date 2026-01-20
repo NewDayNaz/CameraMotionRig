@@ -3,7 +3,7 @@ Description=Camera Control python script
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 /home/jonbons/CameraMotionRig/camera_async/CameraController.py
+ExecStart=/usr/bin/python3 /home/pi/CameraMotionRig/services/CameraController.py
 
 [Install]
 WantedBy=multi-user.target
