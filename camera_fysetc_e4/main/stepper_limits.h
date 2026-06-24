@@ -28,7 +28,16 @@
 #define MAX_TILT_RANGE_STEPS  15230.0f   // Adjust after calibration
 #define MAX_ZOOM_RANGE_STEPS  1000.0f    // Adjust after calibration
 
-// Homing velocity (steps/sec) - slower for accuracy
-#define HOMING_VELOCITY 200.0f
+// Homing velocity per axis (steps/sec) - slower for accuracy
+#define HOMING_PAN_VELOCITY  200.0f
+#define HOMING_TILT_VELOCITY 200.0f
+#define HOMING_ZOOM_VELOCITY 200.0f
+
+// Homing direction per axis
+// 1 = positive direction (towards increasing position)
+// -1 = negative direction (towards decreasing position)
+#define HOMING_PAN_DIRECTION  -1  // Negative direction (towards endstop)
+#define HOMING_TILT_DIRECTION -1  // Negative direction (towards endstop)
+#define HOMING_ZOOM_DIRECTION -1  // Negative direction (towards endstop)
 
 #endif // STEPPER_LIMITS_H

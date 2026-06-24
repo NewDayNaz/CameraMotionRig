@@ -48,6 +48,30 @@ static float preset_decel_start_distance[3]; // Distance at which to start decel
 #define MIN_STEP_DELAY_US 250  // Minimum step delay (max speed ~2000 steps/sec)
 // Note: MIN/MAX velocity constants are defined in stepper_limits.h
 
+// Helper function to get homing velocity for an axis
+static float get_homing_velocity(uint8_t axis) {
+    if (axis == AXIS_PAN) {
+        return HOMING_PAN_VELOCITY;
+    } else if (axis == AXIS_TILT) {
+        return HOMING_TILT_VELOCITY;
+    } else if (axis == AXIS_ZOOM) {
+        return HOMING_ZOOM_VELOCITY;
+    }
+    return 200.0f;  // Default fallback
+}
+
+// Helper function to get homing direction for an axis
+static float get_homing_direction(uint8_t axis) {
+    if (axis == AXIS_PAN) {
+        return (float)HOMING_PAN_DIRECTION;
+    } else if (axis == AXIS_TILT) {
+        return (float)HOMING_TILT_DIRECTION;
+    } else if (axis == AXIS_ZOOM) {
+        return (float)HOMING_ZOOM_DIRECTION;
+    }
+    return -1.0f;  // Default fallback (negative direction)
+}
+
 // Helper function to convert velocity to step delay
 static uint32_t velocity_to_step_delay(float velocity) {
     if (fabsf(velocity) < 0.1f) {
@@ -230,8 +254,11 @@ void stepper_simple_update(void) {
                     // Start homing next axis
                     homing_start_position[homing_axis] = axes[homing_axis].position;
                     homing_steps_taken[homing_axis] = 0;
-                    axes[homing_axis].target_velocity = -HOMING_VELOCITY;  // Move towards endstop
-                    ESP_LOGI(TAG, "Homing axis %d (%s)", homing_axis, axis_names[homing_axis]);
+                    float homing_vel = get_homing_velocity(homing_axis);
+                    float homing_dir = get_homing_direction(homing_axis);
+                    axes[homing_axis].target_velocity = homing_vel * homing_dir;
+                    ESP_LOGI(TAG, "Homing axis %d (%s) at %.1f steps/sec, direction %.0f", 
+                             homing_axis, axis_names[homing_axis], homing_vel, homing_dir);
                 }
             } else {
                 // Read endstop
@@ -259,12 +286,17 @@ void stepper_simple_update(void) {
                         // Start homing next axis
                         homing_start_position[homing_axis] = axes[homing_axis].position;
                         homing_steps_taken[homing_axis] = 0;
-                        axes[homing_axis].target_velocity = -HOMING_VELOCITY;  // Move towards endstop
-                        ESP_LOGI(TAG, "Homing axis %d (%s)", homing_axis, axis_names[homing_axis]);
+                        float homing_vel = get_homing_velocity(homing_axis);
+                        float homing_dir = get_homing_direction(homing_axis);
+                        axes[homing_axis].target_velocity = homing_vel * homing_dir;
+                        ESP_LOGI(TAG, "Homing axis %d (%s) at %.1f steps/sec, direction %.0f", 
+                                 homing_axis, axis_names[homing_axis], homing_vel, homing_dir);
                     }
                 } else {
                     // Move towards endstop
-                    axes[homing_axis].target_velocity = -HOMING_VELOCITY;  // Move towards endstop
+                    float homing_vel = get_homing_velocity(homing_axis);
+                    float homing_dir = get_homing_direction(homing_axis);
+                    axes[homing_axis].target_velocity = homing_vel * homing_dir;
                 }
             }
         }
@@ -547,9 +579,12 @@ void stepper_simple_home(void) {
     }
     
     // Start first axis moving towards endstop
-    axes[0].target_velocity = -HOMING_VELOCITY;  // Move towards endstop
+    float homing_vel = get_homing_velocity(0);
+    float homing_dir = get_homing_direction(0);
+    axes[0].target_velocity = homing_vel * homing_dir;
     
-    ESP_LOGI(TAG, "Homing started - axis 0 (%s)", axis_names[0]);
+    ESP_LOGI(TAG, "Homing started - axis 0 (%s) at %.1f steps/sec, direction %.0f", 
+             axis_names[0], homing_vel, homing_dir);
 }
 
 bool stepper_simple_is_homing(void) {
