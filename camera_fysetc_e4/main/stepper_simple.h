@@ -65,4 +65,10 @@ void stepper_simple_home(void);
  */
 bool stepper_simple_is_homing(void);
 
+/**
+ * @brief Check if a preset goto move is currently in progress
+ * @return true if preset move is active
+ */
+bool stepper_simple_is_preset_moving(void);
+
 #endif // STEPPER_SIMPLE_H

@@ -42,10 +42,10 @@ static float preset_max_speed[3];      // Max speed per axis (steps/sec)
 static float preset_accel_factor;      // Acceleration factor
 static float preset_decel_factor;      // Deceleration factor (most important for accuracy)
 static float preset_total_distance[3]; // Total distance to travel per axis
-static float preset_decel_start_distance[3]; // Distance at which to start decelerating
 
 // Constants
 #define MIN_STEP_DELAY_US 250  // Minimum step delay (max speed ~2000 steps/sec)
+#define PRESET_FINAL_APPROACH_STEPS 10.0f  // Disable min-velocity clamp within this many steps of target
 // Note: MIN/MAX velocity constants are defined in stepper_limits.h
 
 // Helper function to get homing velocity for an axis
@@ -89,6 +89,14 @@ static uint32_t velocity_to_step_delay(float velocity) {
     return delay_us;
 }
 
+// Snap axis to preset target and stop motion (preset moves only)
+static void preset_axis_reach_target(uint8_t axis) {
+    axes[axis].position = (int32_t)lroundf(preset_target[axis]);
+    axes[axis].target_velocity = 0.0f;
+    axes[axis].velocity = 0.0f;
+    axes[axis].move_direction = 0;
+}
+
 void stepper_simple_init(void) {
     if (initialized) {
         return;
@@ -111,7 +119,6 @@ void stepper_simple_init(void) {
     // Initialize preset move state
     for (int i = 0; i < NUM_AXES; i++) {
         preset_total_distance[i] = 0.0f;
-        preset_decel_start_distance[i] = 0.0f;
         preset_max_speed[i] = 0.0f;
         homing_start_position[i] = 0;
         homing_steps_taken[i] = 0;
@@ -132,66 +139,50 @@ void stepper_simple_update(void) {
         bool all_at_target = true;
         
         for (int i = 0; i < NUM_AXES; i++) {
-            // Calculate remaining distance
             float current_pos = (float)axes[i].position;
             float remaining = preset_target[i] - current_pos;
             float remaining_abs = fabsf(remaining);
-            float distance_traveled = preset_total_distance[i] - remaining_abs;
+            float distance_traveled = fabsf(current_pos - preset_start[i]);
             
-            // Check if at target - use tighter threshold and ensure velocity is near zero
-            // Don't snap position - let it reach naturally for accuracy
-            if (remaining_abs < 0.5f && fabsf(axes[i].velocity) < 1.0f) {
-                // At target - stop immediately
-                axes[i].target_velocity = 0.0f;
-                // Don't snap position - let step counting maintain accuracy
+            if (remaining_abs < 0.5f) {
+                // At target — stop immediately regardless of current velocity
+                preset_axis_reach_target(i);
             } else {
                 all_at_target = false;
                 
-                // Distance-based velocity calculation with acceleration/deceleration zones
                 float max_vel = preset_max_speed[i];
                 
-                // Distance-based velocity with acceleration/deceleration zones
-                // Deceleration zone: percentage of total distance where we slow down
-                // Higher decel_factor = larger decel zone = gentler slowdown = more accurate positioning
-                // decel_factor of 1.0 = 30% of distance for decel, 2.0 = 50%, 3.0 = 60%, etc.
-                float decel_zone_percent = 0.3f * preset_decel_factor;  // Base 30% * factor
-                if (decel_zone_percent > 0.8f) decel_zone_percent = 0.8f;  // Cap at 80% max
+                float decel_zone_percent = 0.3f * preset_decel_factor;
+                if (decel_zone_percent > 0.8f) decel_zone_percent = 0.8f;
                 float decel_zone_size = preset_total_distance[i] * decel_zone_percent;
                 
-                // Acceleration zone: start of movement where we ramp up
-                // Higher accel_factor = smaller accel zone = faster to max speed
-                // accel_factor of 1.0 = 20% of distance for accel, 2.0 = 10%, etc.
-                float accel_zone_percent = 0.2f / preset_accel_factor;  // Base 20% / factor
-                if (accel_zone_percent > 0.5f) accel_zone_percent = 0.5f;  // Cap at 50% max
+                float accel_zone_percent = 0.2f / preset_accel_factor;
+                if (accel_zone_percent > 0.5f) accel_zone_percent = 0.5f;
                 float accel_zone_size = preset_total_distance[i] * accel_zone_percent;
+                
+                bool final_approach = (remaining_abs <= decel_zone_size + PRESET_FINAL_APPROACH_STEPS);
                 
                 float target_vel;
                 if (remaining_abs <= decel_zone_size) {
-                    // Deceleration zone - reduce speed linearly as we approach target
-                    // This is most important for accurate positioning
-                    float speed_factor = remaining_abs / decel_zone_size;
-                    // Allow very slow speeds near target for precision
-                    if (speed_factor < 0.02f && remaining_abs > 2.0f) {
-                        // If still more than 2 steps away, maintain minimum 2% speed
+                    float speed_factor = (decel_zone_size > 0.1f)
+                        ? (remaining_abs / decel_zone_size) : 0.0f;
+                    if (!final_approach && speed_factor < 0.02f) {
                         speed_factor = 0.02f;
                     } else if (speed_factor < 0.01f) {
-                        // Very close - allow very slow approach (but not zero)
                         speed_factor = 0.01f;
                     }
                     target_vel = max_vel * speed_factor;
                 } else if (distance_traveled < accel_zone_size) {
-                    // Acceleration zone - ramp up speed (handled by slew rate limiting)
-                    float speed_factor = distance_traveled / accel_zone_size;
-                    if (speed_factor < 0.2f) speed_factor = 0.2f;  // Start at 20% speed
+                    float speed_factor = (accel_zone_size > 0.1f)
+                        ? (distance_traveled / accel_zone_size) : 1.0f;
+                    if (speed_factor < 0.2f) speed_factor = 0.2f;
                     target_vel = max_vel * speed_factor;
                 } else {
-                    // Cruise zone - maintain max speed
                     target_vel = max_vel;
                 }
                 
-                // Apply minimum velocity to prevent stalling (but allow stopping when very close to target)
-                // Only apply if not very close to target (where we need precision)
-                if (remaining_abs > 2.0f) {
+                // Min-velocity clamp is for manual jog only — skip during preset final approach
+                if (!final_approach && remaining_abs > PRESET_FINAL_APPROACH_STEPS) {
                     float min_vel = 0.0f;
                     if (i == AXIS_PAN || i == AXIS_TILT) {
                         min_vel = MIN_PAN_TILT_VELOCITY;
@@ -204,7 +195,6 @@ void stepper_simple_update(void) {
                     }
                 }
                 
-                // Set direction and target velocity
                 axes[i].target_velocity = (remaining > 0) ? target_vel : -target_vel;
             }
         }
@@ -353,12 +343,21 @@ void stepper_simple_update(void) {
             int64_t time_since_last_step = now_us - axes[i].last_step_time;
             
             if (time_since_last_step >= axes[i].step_delay_us) {
-                // Generate step pulse
+                // Preset move: don't step past target — snap and stop instead
+                if (preset_move_active) {
+                    float remaining = preset_target[i] - (float)axes[i].position;
+                    if ((axes[i].move_direction == 1 && remaining < 1.0f) ||
+                        (axes[i].move_direction == 2 && remaining > -1.0f)) {
+                        preset_axis_reach_target(i);
+                        gpio_set_level(step_pins[i], 0);
+                        continue;
+                    }
+                }
+                
                 gpio_set_level(step_pins[i], 1);
-                esp_rom_delay_us(1);  // Very short pulse
+                esp_rom_delay_us(1);
                 gpio_set_level(step_pins[i], 0);
                 
-                // Update position
                 if (axes[i].move_direction == 1) {
                     axes[i].position++;
                 } else {
@@ -453,6 +452,11 @@ bool stepper_simple_goto_preset(uint8_t preset_index) {
         return false;
     }
     
+    if (homing_active) {
+        ESP_LOGW(TAG, "Goto preset blocked - homing in progress");
+        return false;
+    }
+    
     preset_t preset;
     if (!preset_load(preset_index, &preset) || !preset.valid) {
         ESP_LOGE(TAG, "Preset %d not found or invalid", preset_index);
@@ -520,15 +524,17 @@ bool stepper_simple_goto_preset(uint8_t preset_index) {
     
     // Store acceleration/deceleration factors
     preset_accel_factor = preset.accel_factor;
-    preset_decel_factor = (preset.decel_factor > 0.1f) ? preset.decel_factor : 1.0f;  // Default to 1.0 if invalid
+    preset_decel_factor = (preset.decel_factor > 0.1f) ? preset.decel_factor : 1.0f;
+    
+    // Cancel any in-progress preset move before starting new one
+    preset_move_active = false;
+    for (int i = 0; i < NUM_AXES; i++) {
+        axes[i].target_velocity = 0.0f;
+        axes[i].velocity = 0.0f;
+    }
     
     preset_move_active = true;
     preset_move_index = preset_index;
-    
-    // Stop manual velocity control
-    for (int i = 0; i < NUM_AXES; i++) {
-        axes[i].target_velocity = 0.0f;
-    }
     
     ESP_LOGI(TAG, "Moving to preset %d: (%.1f, %.1f, %.1f) from (%.1f, %.1f, %.1f), max_speed=%.1f, decel_factor=%.2f", 
              preset_index, preset_target[0], preset_target[1], preset_target[2],
@@ -589,5 +595,9 @@ void stepper_simple_home(void) {
 
 bool stepper_simple_is_homing(void) {
     return homing_active;
+}
+
+bool stepper_simple_is_preset_moving(void) {
+    return preset_move_active;
 }
 
