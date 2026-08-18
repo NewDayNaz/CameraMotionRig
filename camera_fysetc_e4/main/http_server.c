@@ -8,6 +8,7 @@
 #include "stepper_limits.h"
 #include "preset_storage.h"
 #include "wifi_manager.h"
+#include "board.h"
 
 // Maximum velocities for web UI (steps/sec) - use limits from stepper_limits.h
 #define MAX_VELOCITY_PAN  MAX_PAN_VELOCITY
@@ -127,7 +128,7 @@ static esp_err_t root_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-// Handler for /api/positions - GET current positions
+// Handler for /api/positions - GET current positions and endstop status
 static esp_err_t api_positions_handler(httpd_req_t *req) {
     float pan, tilt, zoom;
     stepper_simple_get_positions(&pan, &tilt, &zoom);
@@ -136,6 +137,12 @@ static esp_err_t api_positions_handler(httpd_req_t *req) {
     cJSON_AddNumberToObject(json, "pan", pan);
     cJSON_AddNumberToObject(json, "tilt", tilt);
     cJSON_AddNumberToObject(json, "zoom", zoom);
+
+    cJSON *endstops = cJSON_CreateObject();
+    cJSON_AddBoolToObject(endstops, "pan", board_get_endstop_triggered(AXIS_PAN));
+    cJSON_AddBoolToObject(endstops, "tilt", board_get_endstop_triggered(AXIS_TILT));
+    cJSON_AddBoolToObject(endstops, "zoom", board_get_endstop_triggered(AXIS_ZOOM));
+    cJSON_AddItemToObject(json, "endstops", endstops);
     
     char *json_string = cJSON_Print(json);
     httpd_resp_set_type(req, "application/json");

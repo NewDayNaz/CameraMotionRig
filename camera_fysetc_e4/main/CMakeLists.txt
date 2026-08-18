@@ -21,14 +21,17 @@ idf_component_register(
         "."
         "${CMAKE_CURRENT_BINARY_DIR}"
     PRIV_REQUIRES 
-        driver
+        esp_driver_gpio
+        esp_driver_uart
         nvs_flash
         esp_timer
         esp_wifi
         esp_http_server
-        json
         esp_netif
         app_update
+        esp_event
+        esp_partition
+        esp_app_format
 )
 
 # Generate HTML header file (only during build phase, not requirements phase)
