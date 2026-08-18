@@ -31,13 +31,13 @@
 // Homing velocity per axis (steps/sec) - slower for accuracy
 #define HOMING_PAN_VELOCITY  200.0f
 #define HOMING_TILT_VELOCITY 200.0f
-#define HOMING_ZOOM_VELOCITY 200.0f
+#define HOMING_ZOOM_VELOCITY 50.0f
 
 // Homing direction per axis
 // 1 = positive direction (towards increasing position)
 // -1 = negative direction (towards decreasing position)
-#define HOMING_PAN_DIRECTION  -1  // Negative direction (towards endstop)
-#define HOMING_TILT_DIRECTION -1  // Negative direction (towards endstop)
+#define HOMING_PAN_DIRECTION  1  // Positive direction (towards endstop)
+#define HOMING_TILT_DIRECTION 1  // Positive direction (towards endstop)
 #define HOMING_ZOOM_DIRECTION -1  // Negative direction (towards endstop)
 
 #endif // STEPPER_LIMITS_H

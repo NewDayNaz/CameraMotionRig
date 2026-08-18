@@ -32,6 +32,7 @@ idf_component_register(
         esp_event
         esp_partition
         esp_app_format
+	json
 )
 
 # Generate HTML header file (only during build phase, not requirements phase)

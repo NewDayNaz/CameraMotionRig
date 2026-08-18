@@ -29,6 +29,7 @@ typedef struct {
 static axis_state_t axes[NUM_AXES];
 static bool initialized = false;
 static bool homing_active = false;
+static bool startup_homing = false;
 static uint8_t homing_axis = 0;
 static int32_t homing_start_position[NUM_AXES];  // Starting position when homing began
 static int32_t homing_steps_taken[NUM_AXES];     // Steps taken during homing (absolute value)
@@ -125,6 +126,35 @@ void stepper_simple_init(void) {
     }
     
     ESP_LOGI(TAG, "Simple stepper control initialized");
+
+    startup_homing = true;
+    stepper_simple_home(); // Start homing sequence on startup
+}
+
+static void start_startup_preset(void)
+{
+    // This should only happen for the homing sequence started at startup.
+    if (!startup_homing) {
+        return;
+    }
+
+    // Clear the flag so preset 1 can only be recalled once.
+    startup_homing = false;
+
+    // Check whether preset 1 actually exists.
+    preset_t preset;
+
+    if (!preset_load(1, &preset) || !preset.valid) {
+        ESP_LOGI(TAG,
+                 "Startup homing complete - preset 1 is not stored, staying at home");
+        return;
+    }
+
+    ESP_LOGI(TAG, "Startup homing complete - recalling preset 1");
+
+    if (!stepper_simple_goto_preset(1)) {
+        ESP_LOGW(TAG, "Failed to recall preset 1 after startup homing");
+    }
 }
 
 void stepper_simple_update(void) {
@@ -240,6 +270,9 @@ void stepper_simple_update(void) {
                 if (homing_axis >= NUM_AXES) {
                     homing_active = false;
                     ESP_LOGI(TAG, "Homing complete (some axes may have bailed out)");
+
+                    // Recall startup preset after startup homing
+                    start_startup_preset();
                 } else {
                     // Start homing next axis
                     homing_start_position[homing_axis] = axes[homing_axis].position;
@@ -272,6 +305,9 @@ void stepper_simple_update(void) {
                     if (homing_axis >= NUM_AXES) {
                         homing_active = false;
                         ESP_LOGI(TAG, "Homing complete");
+
+                        // Recall startup preset after startup homing
+                        start_startup_preset();
                     } else {
                         // Start homing next axis
                         homing_start_position[homing_axis] = axes[homing_axis].position;
