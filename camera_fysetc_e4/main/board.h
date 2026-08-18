@@ -10,6 +10,7 @@
 #define BOARD_H
 
 #include <stdint.h>
+#include <stdbool.h>
 #include "driver/gpio.h"
 
 // Number of axes (PAN, TILT, ZOOM)
@@ -97,6 +98,13 @@ void board_init(void);
  * @param enable true to enable drivers, false to disable
  */
 void board_set_enable(bool enable);
+
+/**
+ * @brief Read whether an axis endstop is currently triggered
+ * @param axis Axis index (AXIS_PAN, AXIS_TILT, AXIS_ZOOM)
+ * @return true if endstop is active (pressed), false if open/clear or unconfigured
+ */
+bool board_get_endstop_triggered(uint8_t axis);
 
 #endif // BOARD_H
 

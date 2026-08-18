@@ -29,9 +29,9 @@ const gpio_num_t dir_pins[NUM_AXES] = {
 // NOTE: GPIO15 is a strap pin - use external pullup resistor (10kΩ to 3.3V)
 // NOTE: GPIO34/35 are input-only - require external pullups (10kΩ to 3.3V)
 const gpio_num_t endstop_pins[NUM_AXES] = {
-    PIN_X_MIN,    // PAN endstop (GPIO15 - requires external pullup for boot)
+    PIN_X_MIN,    // PAN endstop (GPIO34 - input-only, requires external pullup)
     PIN_Y_MIN,    // TILT endstop (GPIO35 - input-only, requires external pullup)
-    PIN_Z_MIN     // ZOOM endstop (GPIO34 - input-only, requires external pullup)
+    PIN_Z_MIN     // ZOOM endstop (GPIO15 - requires external pullup for boot)
 };
 
 // TMC2209 driver UART addresses (based on FluidNC config)
@@ -118,5 +118,13 @@ void board_set_enable(bool enable) {
     // "high" means active HIGH, so LOW = disabled, HIGH = enabled
     // But TMC2209 EN pin is active LOW, so we need to invert
     gpio_set_level(PIN_X_EN, enable ? 0 : 1);
+}
+
+bool board_get_endstop_triggered(uint8_t axis) {
+    if (axis >= NUM_AXES || endstop_pins[axis] == GPIO_NUM_NC) {
+        return false;
+    }
+    // Endstops are active LOW
+    return gpio_get_level(endstop_pins[axis]) == 0;
 }
 
