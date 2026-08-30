@@ -40,4 +40,9 @@
 #define HOMING_TILT_DIRECTION 1  // Positive direction (towards endstop)
 #define HOMING_ZOOM_DIRECTION -1  // Negative direction (towards endstop)
 
+// Preset recall: constant velocity, no accel/decel (repeatability over smoothness)
+#define PRESET_PAN_TILT_VELOCITY  150.0f   // steps/sec — conservative for open-loop accuracy
+#define PRESET_ZOOM_VELOCITY         40.0f   // steps/sec — zoom skips steps easily
+#define PRESET_BACKLASH_STEPS           8    // overshoot for uni-directional final approach
+
 #endif // STEPPER_LIMITS_H

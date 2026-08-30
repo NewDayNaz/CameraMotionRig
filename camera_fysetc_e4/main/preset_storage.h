@@ -21,9 +21,9 @@
  */
 typedef struct {
     float pos[NUM_AXES];      // Target positions (pan, tilt, zoom)
-    float max_speed;          // Maximum speed for this move (steps/sec, 0 = use default)
-    float accel_factor;       // Acceleration factor (1.0 = normal, >1.0 = faster accel, <1.0 = slower accel)
-    float decel_factor;       // Deceleration factor (1.0 = normal, >1.0 = faster decel, <1.0 = slower decel) - most important for accuracy
+    float max_speed;          // Maximum speed for preset recall (steps/sec, 0 = use default)
+    float accel_factor;       // Legacy NVS field — ignored (constant-velocity recall)
+    float decel_factor;       // Legacy NVS field — ignored (constant-velocity recall)
     bool valid;               // Is this preset valid/initialized?
 } preset_t;
 
