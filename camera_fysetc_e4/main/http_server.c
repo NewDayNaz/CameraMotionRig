@@ -9,6 +9,7 @@
 #include "preset_storage.h"
 #include "wifi_manager.h"
 #include "board.h"
+#include "tmc_driver.h"
 
 // Maximum velocities for web UI (steps/sec) - use limits from stepper_limits.h
 #define MAX_VELOCITY_PAN  MAX_PAN_VELOCITY
@@ -23,6 +24,8 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char* TAG = "http_server";
 static httpd_handle_t server_handle = NULL;
@@ -130,24 +133,36 @@ static esp_err_t root_handler(httpd_req_t *req) {
 
 // Handler for /api/positions - GET current positions and endstop status
 static esp_err_t api_positions_handler(httpd_req_t *req) {
-    float pan, tilt, zoom;
-    stepper_simple_get_positions(&pan, &tilt, &zoom);
-    
+    motion_status_t st;
+    stepper_simple_get_status(&st);
+
     cJSON *json = cJSON_CreateObject();
-    cJSON_AddNumberToObject(json, "pan", pan);
-    cJSON_AddNumberToObject(json, "tilt", tilt);
-    cJSON_AddNumberToObject(json, "zoom", zoom);
+    cJSON_AddNumberToObject(json, "pan", (double)st.position[AXIS_PAN]);
+    cJSON_AddNumberToObject(json, "tilt", (double)st.position[AXIS_TILT]);
+    cJSON_AddNumberToObject(json, "zoom", (double)st.position[AXIS_ZOOM]);
+    cJSON_AddBoolToObject(json, "homed", st.homed);
+    cJSON_AddBoolToObject(json, "homing", st.homing);
+    cJSON_AddBoolToObject(json, "moving", st.moving);
+    cJSON_AddNumberToObject(json, "idle_rehome_s", (double)st.idle_rehome_s);
+    const char *err = stepper_simple_last_error();
+    cJSON_AddStringToObject(json, "error", (err != NULL) ? err : "");
 
     cJSON *endstops = cJSON_CreateObject();
-    cJSON_AddBoolToObject(endstops, "pan", board_get_endstop_triggered(AXIS_PAN));
-    cJSON_AddBoolToObject(endstops, "tilt", board_get_endstop_triggered(AXIS_TILT));
-    cJSON_AddBoolToObject(endstops, "zoom", board_get_endstop_triggered(AXIS_ZOOM));
+    cJSON_AddBoolToObject(endstops, "pan", st.endstop[AXIS_PAN]);
+    cJSON_AddBoolToObject(endstops, "tilt", st.endstop[AXIS_TILT]);
+    cJSON_AddBoolToObject(endstops, "zoom", st.endstop[AXIS_ZOOM]);
     cJSON_AddItemToObject(json, "endstops", endstops);
-    
+
+    cJSON *faults = cJSON_CreateObject();
+    cJSON_AddBoolToObject(faults, "pan", st.axis_fault[AXIS_PAN]);
+    cJSON_AddBoolToObject(faults, "tilt", st.axis_fault[AXIS_TILT]);
+    cJSON_AddBoolToObject(faults, "zoom", st.axis_fault[AXIS_ZOOM]);
+    cJSON_AddItemToObject(json, "faults", faults);
+
     char *json_string = cJSON_Print(json);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, json_string, strlen(json_string));
-    
+
     free(json_string);
     cJSON_Delete(json);
     return ESP_OK;
@@ -271,15 +286,17 @@ static esp_err_t api_preset_goto_handler(httpd_req_t *req) {
     
     uint8_t preset_idx = (uint8_t)idx->valueint;
     bool success = stepper_simple_goto_preset(preset_idx);
-    
+
     cJSON_Delete(json);
-    
+
     cJSON *response = cJSON_CreateObject();
     if (success) {
         cJSON_AddStringToObject(response, "status", "ok");
     } else {
         cJSON_AddStringToObject(response, "status", "error");
-        cJSON_AddStringToObject(response, "error", "Failed to move to preset");
+        const char *err = stepper_simple_last_error();
+        cJSON_AddStringToObject(response, "error",
+                                (err && err[0]) ? err : "Failed to move to preset");
     }
     
     char *response_str = cJSON_Print(response);
@@ -316,15 +333,17 @@ static esp_err_t api_preset_save_handler(httpd_req_t *req) {
     
     uint8_t preset_idx = (uint8_t)idx->valueint;
     bool success = stepper_simple_save_preset(preset_idx);
-    
+
     cJSON_Delete(json);
-    
+
     cJSON *response = cJSON_CreateObject();
     if (success) {
         cJSON_AddStringToObject(response, "status", "ok");
     } else {
         cJSON_AddStringToObject(response, "status", "error");
-        cJSON_AddStringToObject(response, "error", "Failed to save preset");
+        const char *err = stepper_simple_last_error();
+        cJSON_AddStringToObject(response, "error",
+                                (err && err[0]) ? err : "Failed to save preset");
     }
     
     char *response_str = cJSON_Print(response);
@@ -695,6 +714,240 @@ static esp_err_t api_update_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+static void tmc_diag_to_json(cJSON *obj, const tmc_diag_t *d)
+{
+    cJSON_AddStringToObject(obj, "axis", axis_names[d->axis]);
+    cJSON_AddNumberToObject(obj, "address", d->address);
+    cJSON_AddBoolToObject(obj, "uart_ok", d->uart_ok);
+    cJSON_AddBoolToObject(obj, "write_ack", d->write_ack);
+    cJSON_AddNumberToObject(obj, "ic_version", d->ic_version);
+    cJSON_AddBoolToObject(obj, "ic_is_tmc2209", d->ic_version == 0x21);
+    cJSON_AddNumberToObject(obj, "gconf", (double)d->gconf);
+    cJSON_AddNumberToObject(obj, "gstat", (double)d->gstat);
+    cJSON_AddNumberToObject(obj, "ifcnt_before", (double)d->ifcnt_before);
+    cJSON_AddNumberToObject(obj, "ifcnt_after", (double)d->ifcnt_after);
+    cJSON_AddNumberToObject(obj, "ioin", (double)d->ioin);
+    cJSON_AddNumberToObject(obj, "tstep", (double)d->tstep);
+    cJSON_AddNumberToObject(obj, "tcoolthrs", (double)d->tcoolthrs);
+    cJSON_AddNumberToObject(obj, "sgthrs", (double)d->sgthrs);
+    cJSON_AddNumberToObject(obj, "sg_result", (double)d->sg_result);
+    cJSON_AddNumberToObject(obj, "chopconf", (double)d->chopconf);
+    cJSON_AddNumberToObject(obj, "ihold", d->ihold);
+    cJSON_AddNumberToObject(obj, "irun", d->irun);
+    cJSON_AddBoolToObject(obj, "motor_looks_stopped", d->tstep >= 0xFFFF0);
+}
+
+static esp_err_t api_tmc_diag_handler(httpd_req_t *req)
+{
+    cJSON *json = cJSON_CreateObject();
+    cJSON_AddBoolToObject(json, "uart_installed", tmc_driver_uart_installed());
+    cJSON_AddBoolToObject(json, "configured", tmc_driver_is_ready());
+    cJSON_AddNumberToObject(json, "sg_stall_threshold", HOME_ZOOM_SG_STALL_MAX);
+    cJSON_AddNumberToObject(json, "sgthrs_zoom_config", 60);
+
+    cJSON *axes_json = cJSON_CreateArray();
+    int ok_count = 0;
+    for (uint8_t i = 0; i < NUM_AXES; i++) {
+        tmc_diag_t d;
+        tmc_driver_diagnose_axis(i, &d);
+        if (d.uart_ok) {
+            ok_count++;
+        }
+        cJSON *ax = cJSON_CreateObject();
+        tmc_diag_to_json(ax, &d);
+        cJSON_AddItemToArray(axes_json, ax);
+    }
+    cJSON_AddItemToObject(json, "axes", axes_json);
+    cJSON_AddStringToObject(json, "status", ok_count > 0 ? "ok" : "error");
+    if (ok_count == 0) {
+        cJSON_AddStringToObject(json, "hint",
+            "No driver answered UART1 (GPIO22 TX / GPIO21 RX). Check the FYSETC E4 UART jumper/wiring and driver addresses.");
+    } else if (ok_count < NUM_AXES) {
+        cJSON_AddStringToObject(json, "hint",
+            "Some axes did not ACK. Address map is PAN=1 TILT=3 ZOOM=0.");
+    } else {
+        cJSON_AddStringToObject(json, "hint",
+            "UART OK. For stallGuard: jog ZOOM and watch SG_RESULT drop at the lens stop. TSTEP max means the motor is stopped (SG will not change).");
+    }
+
+    char *s = cJSON_Print(json);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, s, strlen(s));
+    free(s);
+    cJSON_Delete(json);
+    return ESP_OK;
+}
+
+static esp_err_t api_tmc_sg_handler(httpd_req_t *req)
+{
+    char query[64] = {0};
+    uint8_t axis = AXIS_ZOOM;
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        char axis_str[8];
+        if (httpd_query_key_value(query, "axis", axis_str, sizeof(axis_str)) == ESP_OK) {
+            axis = (uint8_t)atoi(axis_str);
+        }
+    }
+    if (axis >= NUM_AXES) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "axis must be 0, 1, or 2");
+        return ESP_FAIL;
+    }
+
+    uint16_t sg = 0;
+    uint32_t tstep = 0;
+    bool ok = tmc_driver_read_sg_tstep(axis, &sg, &tstep);
+
+    cJSON *json = cJSON_CreateObject();
+    cJSON_AddStringToObject(json, "status", ok ? "ok" : "error");
+    cJSON_AddStringToObject(json, "axis", axis_names[axis]);
+    cJSON_AddBoolToObject(json, "ok", ok);
+    cJSON_AddNumberToObject(json, "sg_result", sg);
+    cJSON_AddNumberToObject(json, "tstep", (double)tstep);
+    cJSON_AddNumberToObject(json, "threshold", HOME_ZOOM_SG_STALL_MAX);
+    cJSON_AddBoolToObject(json, "would_stall", ok && sg <= HOME_ZOOM_SG_STALL_MAX);
+    cJSON_AddBoolToObject(json, "motor_looks_stopped", tstep >= 0xFFFF0);
+    if (!ok) {
+        cJSON_AddStringToObject(json, "error", "UART read failed");
+    }
+
+    char *s = cJSON_Print(json);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, s, strlen(s));
+    free(s);
+    cJSON_Delete(json);
+    return ESP_OK;
+}
+
+static esp_err_t api_tmc_sg_sample_handler(httpd_req_t *req)
+{
+    char content[256];
+    int ret = httpd_req_recv(req, content, sizeof(content) - 1);
+    if (ret <= 0) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    content[ret] = '\0';
+
+    uint8_t axis = AXIS_ZOOM;
+    int samples = 30;
+    int interval_ms = 50;
+    float velocity = 50.0f;
+
+    cJSON *json = cJSON_Parse(content);
+    if (json) {
+        cJSON *item;
+        if ((item = cJSON_GetObjectItem(json, "axis")) && cJSON_IsNumber(item)) {
+            axis = (uint8_t)item->valueint;
+        }
+        if ((item = cJSON_GetObjectItem(json, "samples")) && cJSON_IsNumber(item)) {
+            samples = item->valueint;
+        }
+        if ((item = cJSON_GetObjectItem(json, "interval_ms")) && cJSON_IsNumber(item)) {
+            interval_ms = item->valueint;
+        }
+        if ((item = cJSON_GetObjectItem(json, "velocity")) && cJSON_IsNumber(item)) {
+            velocity = (float)item->valuedouble;
+        }
+        cJSON_Delete(json);
+    }
+
+    if (axis >= NUM_AXES) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "axis must be 0, 1, or 2");
+        return ESP_FAIL;
+    }
+    if (samples < 1) {
+        samples = 1;
+    }
+    if (samples > 60) {
+        samples = 60;
+    }
+    if (interval_ms < 20) {
+        interval_ms = 20;
+    }
+    if (interval_ms > 200) {
+        interval_ms = 200;
+    }
+
+    if (stepper_simple_is_homing()) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Homing in progress");
+        return ESP_FAIL;
+    }
+
+    float vels[3] = {0, 0, 0};
+    vels[axis] = velocity;
+    stepper_simple_set_velocities(vels[0], vels[1], vels[2]);
+
+    cJSON *response = cJSON_CreateObject();
+    cJSON *arr = cJSON_CreateArray();
+    int ok_n = 0;
+    uint16_t sg_min = 1023;
+    uint16_t sg_max = 0;
+    unsigned long sg_sum = 0;
+    int stall_hits = 0;
+
+    for (int i = 0; i < samples; i++) {
+        vTaskDelay(pdMS_TO_TICKS(interval_ms));
+        uint16_t sg = 0;
+        uint32_t tstep = 0;
+        if (tmc_driver_read_sg_tstep(axis, &sg, &tstep)) {
+            ok_n++;
+            if (sg < sg_min) {
+                sg_min = sg;
+            }
+            if (sg > sg_max) {
+                sg_max = sg;
+            }
+            sg_sum += sg;
+            if (sg <= HOME_ZOOM_SG_STALL_MAX) {
+                stall_hits++;
+            }
+            cJSON *pt = cJSON_CreateObject();
+            cJSON_AddNumberToObject(pt, "sg", sg);
+            cJSON_AddNumberToObject(pt, "tstep", (double)tstep);
+            cJSON_AddItemToArray(arr, pt);
+        }
+    }
+
+    stepper_simple_set_velocities(0, 0, 0);
+
+    cJSON_AddStringToObject(response, "status", ok_n > 0 ? "ok" : "error");
+    cJSON_AddStringToObject(response, "axis", axis_names[axis]);
+    cJSON_AddNumberToObject(response, "velocity", velocity);
+    cJSON_AddNumberToObject(response, "threshold", HOME_ZOOM_SG_STALL_MAX);
+    cJSON_AddNumberToObject(response, "samples_ok", ok_n);
+    if (ok_n > 0) {
+        cJSON_AddNumberToObject(response, "sg_min", sg_min);
+        cJSON_AddNumberToObject(response, "sg_max", sg_max);
+        cJSON_AddNumberToObject(response, "sg_avg", (double)sg_sum / (double)ok_n);
+        cJSON_AddNumberToObject(response, "stall_hits", stall_hits);
+    }
+    cJSON_AddItemToObject(response, "points", arr);
+
+    char *s = cJSON_Print(response);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, s, strlen(s));
+    free(s);
+    cJSON_Delete(response);
+    return ESP_OK;
+}
+
+static esp_err_t api_tmc_reconfigure_handler(httpd_req_t *req)
+{
+    bool ok = tmc_driver_reconfigure();
+    cJSON *json = cJSON_CreateObject();
+    cJSON_AddStringToObject(json, "status", ok ? "ok" : "error");
+    cJSON_AddBoolToObject(json, "configured", ok);
+    if (!ok) {
+        cJSON_AddStringToObject(json, "error", "Reconfigure failed — UART may be down");
+    }
+    char *s = cJSON_Print(json);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, s, strlen(s));
+    free(s);
+    cJSON_Delete(json);
+    return ESP_OK;
+}
+
 bool http_server_start(void) {
     // If server is already running, return success
     if (server_handle != NULL) {
@@ -703,7 +956,7 @@ bool http_server_start(void) {
     }
     
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 10;
+    config.max_uri_handlers = 16;
     
     ESP_LOGI(TAG, "Starting HTTP server on port %d", config.server_port);
     
@@ -771,6 +1024,34 @@ bool http_server_start(void) {
             .handler = api_update_handler,
         };
         httpd_register_uri_handler(server_handle, &update_uri);
+
+        httpd_uri_t tmc_diag_uri = {
+            .uri = "/api/tmc/diag",
+            .method = HTTP_GET,
+            .handler = api_tmc_diag_handler,
+        };
+        httpd_register_uri_handler(server_handle, &tmc_diag_uri);
+
+        httpd_uri_t tmc_sg_uri = {
+            .uri = "/api/tmc/sg",
+            .method = HTTP_GET,
+            .handler = api_tmc_sg_handler,
+        };
+        httpd_register_uri_handler(server_handle, &tmc_sg_uri);
+
+        httpd_uri_t tmc_sg_sample_uri = {
+            .uri = "/api/tmc/sg-sample",
+            .method = HTTP_POST,
+            .handler = api_tmc_sg_sample_handler,
+        };
+        httpd_register_uri_handler(server_handle, &tmc_sg_sample_uri);
+
+        httpd_uri_t tmc_reconfig_uri = {
+            .uri = "/api/tmc/reconfigure",
+            .method = HTTP_POST,
+            .handler = api_tmc_reconfigure_handler,
+        };
+        httpd_register_uri_handler(server_handle, &tmc_reconfig_uri);
         
         ESP_LOGI(TAG, "HTTP server started");
         return true;

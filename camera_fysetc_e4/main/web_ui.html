@@ -26,8 +26,11 @@ button { padding: 10px 20px; margin: 5px; font-size: 16px; cursor: pointer; bord
 .status-success { background: #e8f5e9; color: #388e3c; }
 #positions { font-family: monospace; font-size: 18px; }
 #endstops { font-family: monospace; font-size: 16px; margin-top: 8px; }
+#motion_state { font-family: monospace; font-size: 16px; margin-top: 8px; }
 .endstop-hit { color: #c62828; font-weight: bold; }
 .endstop-open { color: #388e3c; }
+.homed-yes { color: #388e3c; font-weight: bold; }
+.homed-no { color: #c62828; font-weight: bold; }
 .preset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin: 10px 0; }
 .preset-btn { padding: 15px; font-size: 14px; position: relative; }
 .preset-edit-btn { position: absolute; top: 2px; right: 2px; padding: 2px 6px; font-size: 10px; background: rgba(0,0,0,0.5); color: white; border: none; border-radius: 3px; cursor: pointer; }
@@ -51,6 +54,11 @@ button { padding: 10px 20px; margin: 5px; font-size: 16px; cursor: pointer; bord
 .joystick-1d.active::before { background: #0b7dda; }
 .joystick-label { margin-top: 10px; font-weight: bold; color: #666; }
 .joystick-value { margin-top: 5px; font-family: monospace; color: #333; }
+#tmc_log { font-family: monospace; font-size: 12px; white-space: pre-wrap; max-height: 320px; overflow: auto; background: #111; color: #d8f8d8; padding: 10px; border-radius: 5px; }
+#sg_bar { height: 22px; background: #ddd; position: relative; border-radius: 4px; overflow: hidden; }
+#sg_fill { height: 100%; width: 0%; background: #2196F3; }
+#sg_thresh { position: absolute; top: 0; bottom: 0; width: 2px; background: #c62828; }
+#sg_live { font-family: monospace; margin-top: 8px; }
 </style>
 </head><body>
 <div class="container">
@@ -58,6 +66,7 @@ button { padding: 10px 20px; margin: 5px; font-size: 16px; cursor: pointer; bord
 <div class="section">
 <h2>Position Status</h2>
 <div id="positions" class="status status-info">Loading...</div>
+<div id="motion_state" class="status status-info">Motion: Loading...</div>
 <div id="endstops" class="status status-info">Endstops: Loading...</div>
 </div>
 <div class="section">
@@ -94,6 +103,30 @@ button { padding: 10px 20px; margin: 5px; font-size: 16px; cursor: pointer; bord
 <h2>Commands</h2>
 <button class="btn-primary" onclick="sendCommand('home')">Home All Axes</button>
 <button class="btn-danger" onclick="sendCommand('stop')">Stop</button>
+</div>
+<div class="section">
+<h2>TMC UART / stallGuard test</h2>
+<p style="color:#666; font-size:14px;">
+Probe checks UART1 (GPIO22/21): IC version 0x21 = TMC2209, <b>write_ack</b> means IFCNT incremented so the driver actually heard a write.
+Live SG: jog ZOOM (or use the spin test) — SG_RESULT should be high while moving freely and drop near 0 at the lens stop. TSTEP at max means the motor is stopped and SG will not change.
+Hold current is now low at rest (zoom IHOLD=0); motors should not cook after days on. If tilt droops, raise TMC_IHOLD_TILT.
+Jog/preset zoom is stall-stopped if the lens hits a hard stop (same SG threshold as homing). After 6 hours idle the rig re-homes and returns to the pose it was holding.
+</p>
+<div>
+<button class="btn-secondary" onclick="probeTmc()">Probe UART</button>
+<button class="btn-secondary" onclick="reconfigureTmc()">Re-send TMC config</button>
+<button class="btn-warning" onclick="spinSgSample()">Spin zoom + sample SG (2s)</button>
+<button class="btn-primary" onclick="startLiveSg()">Start live SG</button>
+<button class="btn-danger" onclick="stopLiveSg()">Stop live SG</button>
+<select id="tmc_axis">
+<option value="0">PAN</option>
+<option value="1">TILT</option>
+<option value="2" selected>ZOOM</option>
+</select>
+</div>
+<div id="sg_bar" style="margin-top:12px;"><div id="sg_fill"></div><div id="sg_thresh"></div></div>
+<div id="sg_live" class="status status-info">SG: —</div>
+<div id="tmc_log">No probe yet.</div>
 </div>
 <div class="section">
 <h2>Firmware Update (OTA)</h2>
@@ -133,9 +166,8 @@ button { padding: 10px 20px; margin: 5px; font-size: 16px; cursor: pointer; bord
 <div><label>Decel Factor:</label><input type="number" id="editor_decel_factor" min="0.1" max="10" step="0.1" value="1.0" disabled title="Not used — preset recall is constant velocity"></div>
 </div>
 <p style="color: #666; font-size: 12px; margin-top: 10px;">
-Max Speed: steps/sec (0 = auto-calculate based on distance)<br>
-Max Speed: steps/sec for preset recall (0 = firmware default ~150 pan/tilt, ~40 zoom).<br>
-Preset recall uses constant velocity with uni-directional approach for repeatability.
+Max Speed: pan/tilt steps/sec for preset recall (0 = firmware default ~150). Zoom always uses the firmware zoom speed (~40) so a fast pan speed cannot skip the zoom axis.<br>
+Preset recall uses constant velocity with uni-directional approach. After flashing this firmware, HOME then re-save every preset.
 </p>
 </div>
 <div style="margin-top: 20px; text-align: right;">
@@ -162,6 +194,7 @@ function endstopLabel(hit) {
 function updatePositions() {
   const posEl = document.getElementById('positions');
   const endEl = document.getElementById('endstops');
+  const stateEl = document.getElementById('motion_state');
   if (!posEl) {
     console.error('positions element not found');
     return;
@@ -174,6 +207,38 @@ function updatePositions() {
   }).then(data => {
     if (data && typeof data.pan === 'number' && typeof data.tilt === 'number' && typeof data.zoom === 'number') {
       posEl.textContent = `PAN: ${data.pan.toFixed(1)} | TILT: ${data.tilt.toFixed(1)} | ZOOM: ${data.zoom.toFixed(1)}`;
+      if (stateEl) {
+        const homed = !!data.homed;
+        const homing = !!data.homing;
+        const moving = !!data.moving;
+        const faults = data.faults || {};
+        const faultBits = [];
+        if (faults.pan) faultBits.push('PAN');
+        if (faults.tilt) faultBits.push('TILT');
+        if (faults.zoom) faultBits.push('ZOOM');
+        const homedHtml = homed
+          ? '<span class="homed-yes">HOMED</span>'
+          : '<span class="homed-no">NOT HOMED</span>';
+        let line = 'State: ' + homedHtml +
+          (homing ? ' | HOMING' : '') +
+          (moving ? ' | MOVING' : ' | IDLE');
+        if (faultBits.length) {
+          line += ' | FAULT ' + faultBits.join(',');
+        }
+        if (!homed && !homing) {
+          line += ' — SAVE/GOTO blocked until HOME succeeds';
+        }
+        if (typeof data.idle_rehome_s === 'number' && data.idle_rehome_s >= 0 && !homing && !moving) {
+          const s = data.idle_rehome_s;
+          const h = Math.floor(s / 3600);
+          const m = Math.floor((s % 3600) / 60);
+          line += ' | idle re-home in ' + h + 'h ' + m + 'm';
+        }
+        if (data.error && data.error !== 'Not homed') {
+          line += '<br><span class="homed-no">' + data.error + '</span>';
+        }
+        stateEl.innerHTML = line;
+      }
       if (endEl && data.endstops) {
         endEl.innerHTML = 'Endstops: PAN ' + endstopLabel(!!data.endstops.pan) +
           ' | TILT ' + endstopLabel(!!data.endstops.tilt) +
@@ -190,6 +255,9 @@ function updatePositions() {
     }
     if (endEl) {
       endEl.textContent = 'Error loading endstops';
+    }
+    if (stateEl) {
+      stateEl.textContent = 'Error loading motion state';
     }
   });
 }
@@ -560,6 +628,116 @@ function uploadFirmware() {
       statusDiv.style.color = '#c62828';
       statusDiv.textContent = 'Upload failed: ' + e.message;
     }
+  });
+}
+let liveSgTimer = null;
+function tmcAxis() {
+  return parseInt(document.getElementById('tmc_axis').value, 10);
+}
+function hex32(n) {
+  return '0x' + ('00000000' + (n >>> 0).toString(16)).slice(-8);
+}
+function setSgBar(sg, threshold) {
+  const pct = Math.max(0, Math.min(100, (sg / 1023) * 100));
+  document.getElementById('sg_fill').style.width = pct + '%';
+  document.getElementById('sg_thresh').style.left = ((threshold / 1023) * 100) + '%';
+  document.getElementById('sg_fill').style.background = sg <= threshold ? '#c62828' : '#2196F3';
+}
+function probeTmc() {
+  const log = document.getElementById('tmc_log');
+  log.textContent = 'Probing UART1...';
+  fetch('/api/tmc/diag').then(r => r.json()).then(data => {
+    let lines = [];
+    lines.push(data.hint || '');
+    lines.push('uart_installed=' + data.uart_installed + ' configured=' + data.configured +
+      ' homing_SG_threshold=' + data.sg_stall_threshold);
+    (data.axes || []).forEach(a => {
+      lines.push('');
+      lines.push(a.axis + ' addr=' + a.address +
+        ' uart_ok=' + a.uart_ok +
+        ' write_ack=' + a.write_ack +
+        ' version=' + hex32(a.ic_version) + (a.ic_is_tmc2209 ? ' (TMC2209)' : ' (NOT 0x21)'));
+      lines.push('  GCONF=' + hex32(a.gconf) + ' CHOPCONF=' + hex32(a.chopconf) +
+        ' IHOLD=' + a.ihold + ' IRUN=' + a.irun);
+      lines.push('  TCOOLTHRS=' + a.tcoolthrs + ' SGTHRS=' + a.sgthrs +
+        ' SG_RESULT=' + a.sg_result + ' TSTEP=' + a.tstep +
+        (a.motor_looks_stopped ? ' (stopped)' : ' (moving)'));
+      lines.push('  IFCNT ' + a.ifcnt_before + ' -> ' + a.ifcnt_after +
+        (a.write_ack ? ' WRITE OK' : ' WRITE NOT ACKED'));
+    });
+    log.textContent = lines.join('\n');
+    const zoom = (data.axes || []).find(a => a.axis === 'ZOOM');
+    if (zoom) {
+      setSgBar(zoom.sg_result, data.sg_stall_threshold || 20);
+      document.getElementById('sg_live').textContent =
+        'SG: ' + zoom.sg_result + '  threshold ' + data.sg_stall_threshold +
+        (zoom.would_stall ? '  WOULD STALL' : '');
+    }
+  }).catch(e => {
+    log.textContent = 'Probe failed: ' + e.message;
+  });
+}
+function reconfigureTmc() {
+  fetch('/api/tmc/reconfigure', { method: 'POST' }).then(r => r.json()).then(data => {
+    document.getElementById('tmc_log').textContent =
+      (data.status === 'ok' ? 'Reconfigure OK' : 'Reconfigure failed') + '\n' +
+      JSON.stringify(data, null, 2);
+    probeTmc();
+  }).catch(e => {
+    document.getElementById('tmc_log').textContent = 'Reconfigure failed: ' + e.message;
+  });
+}
+function applySgLive(data) {
+  if (!data || !data.ok) {
+    document.getElementById('sg_live').textContent = 'SG read failed: ' + (data && data.error ? data.error : 'UART');
+    return;
+  }
+  setSgBar(data.sg_result, data.threshold || 20);
+  document.getElementById('sg_live').textContent =
+    data.axis + ' SG=' + data.sg_result +
+    '  threshold=' + data.threshold +
+    (data.would_stall ? '  WOULD STALL' : '') +
+    (data.motor_looks_stopped ? '  (TSTEP max — motor stopped, jog to see SG change)' : '  (moving)');
+}
+function startLiveSg() {
+  stopLiveSg();
+  const poll = () => {
+    fetch('/api/tmc/sg?axis=' + tmcAxis()).then(r => r.json()).then(applySgLive)
+      .catch(e => { document.getElementById('sg_live').textContent = 'SG poll failed: ' + e.message; });
+  };
+  poll();
+  liveSgTimer = setInterval(poll, 250);
+}
+function stopLiveSg() {
+  if (liveSgTimer) {
+    clearInterval(liveSgTimer);
+    liveSgTimer = null;
+  }
+}
+function spinSgSample() {
+  const log = document.getElementById('tmc_log');
+  log.textContent = 'Spinning selected axis and sampling stallGuard...';
+  fetch('/api/tmc/sg-sample', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ axis: tmcAxis(), samples: 30, interval_ms: 50, velocity: 50 })
+  }).then(r => r.json()).then(data => {
+    let lines = [data.status, data.axis + ' vel=' + data.velocity + ' threshold=' + data.threshold];
+    if (data.samples_ok) {
+      lines.push('min=' + data.sg_min + ' max=' + data.sg_max + ' avg=' + (data.sg_avg && data.sg_avg.toFixed ? data.sg_avg.toFixed(1) : data.sg_avg) +
+        ' stall_hits=' + data.stall_hits + '/' + data.samples_ok);
+      lines.push('If min stays high, stallGuard is not seeing the stop (raise SGTHRS / HOME_ZOOM_SG_STALL_MAX).');
+      lines.push('If min is low while free-running, threshold is too sensitive (lower HOME_ZOOM_SG_STALL_MAX).');
+    }
+    (data.points || []).forEach((p, i) => {
+      lines.push(String(i).padStart(2, '0') + '  SG=' + String(p.sg).padStart(4) + '  TSTEP=' + p.tstep);
+    });
+    log.textContent = lines.join('\n');
+    if (data.sg_min !== undefined) {
+      setSgBar(data.sg_min, data.threshold || 20);
+    }
+  }).catch(e => {
+    log.textContent = 'Sample failed: ' + e.message;
   });
 }
 setTimeout(function() {
