@@ -1,0 +1,15 @@
+/**
+ * @file wifi_config.h.example
+ * @brief Template for local WiFi credentials
+ *
+ * Copy to wifi_config.h and set your SSID/password:
+ *   cp wifi_config.h.example wifi_config.h
+ */
+
+#ifndef WIFI_CONFIG_H
+#define WIFI_CONFIG_H
+
+#define WIFI_SSID     "YOUR_SSID"
+#define WIFI_PASSWORD "YOUR_PASSWORD"
+
+#endif // WIFI_CONFIG_H
