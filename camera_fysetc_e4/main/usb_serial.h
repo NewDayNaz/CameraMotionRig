@@ -3,12 +3,13 @@
  * @brief USB serial command parser for Raspberry Pi communication
  * 
  * Parses commands received over USB serial:
- * - VEL <pan> <tilt> <zoom> - Set velocities
- * - GOTO <n> - Move to preset n
- * - SAVE <n> - Save current position as preset n
- * - HOME - Start homing sequence
+ * - VEL <pan> <tilt> <zoom> - Set velocities (steps/sec)
+ * - GOTO <n> - Move to preset n (requires homed)
+ * - SAVE <n> - Save current position as preset n (requires homed and idle)
+ * - HOME - Start endstop homing sequence
  * - POS - Query current positions
- * - STATUS - Query system status
+ * - STATUS - Positions plus HOMED/MOVING/HOMING/FAULT flags
+ * - STOP - Halt motion (aborts homing and clears homed)
  */
 
 #ifndef USB_SERIAL_H

@@ -25,13 +25,13 @@ const gpio_num_t dir_pins[NUM_AXES] = {
 };
 
 // Endstop pin mapping (GPIO_NUM_NC indicates no endstop)
-// Each axis uses its own endstop pin
-// NOTE: GPIO15 is a strap pin - use external pullup resistor (10kΩ to 3.3V)
-// NOTE: GPIO34/35 are input-only - require external pullups (10kΩ to 3.3V)
+// PAN/TILT: inductive sensors on arm mounts, magnets on the moving axis
+// GPIO34/35 are input-only — require external pullups (10kΩ to 3.3V)
+// ZOOM: no sensor; homed via stallGuard against the lens hard stop
 const gpio_num_t endstop_pins[NUM_AXES] = {
-    PIN_X_MIN,    // PAN endstop (GPIO34 - input-only, requires external pullup)
-    PIN_Y_MIN,    // TILT endstop (GPIO35 - input-only, requires external pullup)
-    PIN_Z_MIN     // ZOOM endstop (GPIO15 - requires external pullup for boot)
+    PIN_X_MIN,    // PAN (GPIO34)
+    PIN_Y_MIN,    // TILT (GPIO35)
+    GPIO_NUM_NC   // ZOOM — no endstop
 };
 
 // TMC2209 driver UART addresses (based on FluidNC config)
@@ -96,7 +96,7 @@ void board_init(void) {
             gpio_config_t endstop_conf = {
                 .pin_bit_mask = (1ULL << endstop_pins[i]),
                 .mode = GPIO_MODE_INPUT,
-                .pull_up_en = GPIO_PULLUP_DISABLE,  // No internal pullup on GPIO34/35
+                .pull_up_en = GPIO_PULLUP_DISABLE,  /* GPIO34/35 have no internal pullup */
                 .pull_down_en = GPIO_PULLDOWN_DISABLE,
                 .intr_type = GPIO_INTR_DISABLE
             };

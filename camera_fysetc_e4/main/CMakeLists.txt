@@ -13,6 +13,7 @@ idf_component_register(
         "main.c"
         "board.c"
         "stepper_simple.c"
+        "tmc_driver.c"
         "preset_storage.c"
         "usb_serial.c"
         "wifi_manager.c"
@@ -28,6 +29,7 @@ idf_component_register(
         esp_wifi
         esp_http_server
         esp_netif
+        esp_hw_support
         app_update
         esp_event
         esp_partition

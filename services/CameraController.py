@@ -598,10 +598,10 @@ while True:
                 # Combine triggers for zoom (left trigger = zoom out, right trigger = zoom in)
                 # Negative value = zoom out, positive = zoom in
                 # Process zoom like web UI: linear, no curve, no smoothing (ESP32 handles smoothing)
-                # Web UI: velZ = normalized * 50 (steps/sec), sent directly
-                # Joystick: we send -32768..32768, ESP32 scales to (value / 32768) * MAX_VEL_ZOOM
-                # ESP32 MAX_VEL_ZOOM = 50, so max zoom via joystick is 50 steps/sec
-                # To match web UI behavior: linear scaling, no curve, no smoothing
+                # Web UI: velZ = normalized * MAX_ZOOM_VELOCITY, sent directly
+                # Joystick: we send -32768..32768, ESP32 scales to (value / 32768) * MAX_ZOOM_VELOCITY
+                # Firmware MAX_ZOOM_VELOCITY is 130 steps/sec (see stepper_limits.h)
+                # Linear scaling, no curve, no smoothing — ESP32 slews velocity
                 trigger_diff = joy_trigger_r - joy_trigger_l
                 
                 # Apply deadzone (minimal for triggers)

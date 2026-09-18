@@ -42,11 +42,12 @@
 #define PIN_E0_DIR   GPIO_NUM_17
 #define PIN_E0_EN    GPIO_NUM_25  // Shared enable
 
-// Endstops (MIN) - Active LOW (require external pullups on GPIO34/35)
-// Each axis uses its own endstop pin
-#define PIN_X_MIN    GPIO_NUM_34  // PAN min endstop (X axis limit_neg)
-#define PIN_Y_MIN    GPIO_NUM_35  // TILT min endstop (Y axis limit_neg)
-#define PIN_Z_MIN    GPIO_NUM_15  // ZOOM min endstop (Z axis limit_neg)
+// Endstops (MIN) - Active LOW inductive sensors (require external pullups on GPIO34/35)
+// PAN/TILT: magnetic inductive sensors aimed at glued magnets
+// ZOOM: no switch — lens hard stop + TMC2209 stallGuard (see stepper_simple homing)
+#define PIN_X_MIN    GPIO_NUM_34  // PAN magnetic sensor (X axis limit_neg)
+#define PIN_Y_MIN    GPIO_NUM_35  // TILT magnetic sensor (Y axis limit_neg)
+#define PIN_Z_MIN    GPIO_NUM_NC  // ZOOM has no endstop
 
 // Motor UART (TMC2209 configuration)
 #define PIN_UART1_TX GPIO_NUM_22
@@ -61,12 +62,9 @@
 #define TMC2209_ADDR_TILT  3  // Y axis driver address
 #define TMC2209_ADDR_ZOOM  0  // Z axis driver address
 
-// Microstepping configuration
-// TMC2209 microstepping is set via hardware pins (MS1, MS2) on the driver board
-// This scale factor converts from "full steps/sec" to "microsteps/sec"
-// Common values: 1 (full step), 2 (half), 4 (quarter), 8 (eighth), 16 (sixteenth), 32 (thirty-second)
-// If your board is configured for 16x microstepping, set this to 16
-#define MICROSTEP_SCALE  8.0f  // Adjust this to match your hardware microstepping configuration
+// TMC UART (tmc_driver.c) sets CHOPCONF MRES to 8 microsteps on boot.
+// Keep this equal to that setting. Velocities and positions are in microsteps.
+#define MICROSTEP_SCALE  8.0f
 
 // Axis to Pin Mapping Arrays
 extern const gpio_num_t step_pins[NUM_AXES];

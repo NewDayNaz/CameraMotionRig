@@ -1,0 +1,7 @@
+## IDF Component Manager Manifest File
+dependencies:
+  ## Required IDF version
+  idf:
+    version: ">=4.1.0"
+  # ESP-IDF 6.0 removed the built-in json component; use managed cJSON instead
+  espressif/cjson: "^1.7.19"
