@@ -31,6 +31,9 @@
 #define MAX_TILT_RANGE_STEPS  15230
 #define MAX_ZOOM_RANGE_STEPS  4000
 
+/* Pan/tilt jog scales with zoom: wide = 1.0, full telephoto = ZOOM_PT_SCALE_MIN. */
+#define ZOOM_PT_SCALE_MIN  0.5f
+
 #define HOMING_PAN_VELOCITY  200.0f
 #define HOMING_TILT_VELOCITY 200.0f
 #define HOMING_ZOOM_VELOCITY 50.0f   /* stallGuard needs some speed */

@@ -1139,8 +1139,21 @@ void stepper_simple_set_velocities(float pan_vel, float tilt_vel, float zoom_vel
     }
 
     float vels[NUM_AXES] = { pan_vel, tilt_vel, zoom_vel };
-    float mins[NUM_AXES] = { MIN_PAN_TILT_VELOCITY, MIN_PAN_TILT_VELOCITY, MIN_ZOOM_VELOCITY };
-    float maxs[NUM_AXES] = { MAX_PAN_VELOCITY, MAX_TILT_VELOCITY, MAX_ZOOM_VELOCITY };
+
+    /* Slow pan/tilt as zoom increases so framing stays controllable telephoto. */
+    float z = (float)axes[AXIS_ZOOM].position / (float)MAX_ZOOM_RANGE_STEPS;
+    if (z < 0.0f) {
+        z = 0.0f;
+    } else if (z > 1.0f) {
+        z = 1.0f;
+    }
+    float pt_scale = 1.0f - z * (1.0f - ZOOM_PT_SCALE_MIN);
+    vels[AXIS_PAN] *= pt_scale;
+    vels[AXIS_TILT] *= pt_scale;
+
+    float pt_min = MIN_PAN_TILT_VELOCITY * pt_scale;
+    float mins[NUM_AXES] = { pt_min, pt_min, MIN_ZOOM_VELOCITY };
+    float maxs[NUM_AXES] = { MAX_PAN_VELOCITY * pt_scale, MAX_TILT_VELOCITY * pt_scale, MAX_ZOOM_VELOCITY };
 
     for (int i = 0; i < NUM_AXES; i++) {
         float v = vels[i];
