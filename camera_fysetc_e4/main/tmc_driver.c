@@ -7,6 +7,7 @@
 #include "board.h"
 #include "stepper_limits.h"
 
+#include "driver/gpio.h"
 #include "driver/uart.h"
 #include "esp_log.h"
 #include "esp_rom_sys.h"
@@ -44,6 +45,9 @@ static const char *TAG = "tmc_driver";
 #define TMC_TPOWERDOWN     20u  /* ~0.4 s until IHOLD after last step */
 
 #define TMC_2209_VERSION   0x21u
+#define TMC_REPLY_MASTER   0xFFu  /* driver → MCU address in read replies */
+#define TMC_READ_RETRIES   3
+#define TMC_READ_TIMEOUT_MS 20
 
 static uint32_t pack_ihold_irun(uint8_t ihold, uint8_t irun)
 {
@@ -113,6 +117,33 @@ static bool tmc_write_reg_unlocked(uint8_t slave, uint8_t reg, uint32_t value)
     return written == (int)sizeof(datagram);
 }
 
+/* FYSETC E4 ties UART TX to PDN through a resistor and RX directly, so the
+ * 4-byte read request is echoed on RX before the 8-byte 0x05 0xFF reply. */
+static bool tmc_parse_read_reply(const uint8_t *buf, int len, uint8_t reg, uint32_t *value)
+{
+    uint8_t want_reg = (uint8_t)(reg & 0x7F);
+    if (buf == NULL || len < 8) {
+        return false;
+    }
+    for (int i = 0; i <= len - 8; i++) {
+        if (buf[i] != TMC_SYNC || buf[i + 1] != TMC_REPLY_MASTER) {
+            continue;
+        }
+        if ((buf[i + 2] & 0x7F) != want_reg) {
+            continue;
+        }
+        if (tmc_crc8(&buf[i], 7) != buf[i + 7]) {
+            continue;
+        }
+        if (value != NULL) {
+            *value = ((uint32_t)buf[i + 3] << 24) | ((uint32_t)buf[i + 4] << 16) |
+                     ((uint32_t)buf[i + 5] << 8) | (uint32_t)buf[i + 6];
+        }
+        return true;
+    }
+    return false;
+}
+
 static bool tmc_read_reg_unlocked(uint8_t slave, uint8_t reg, uint32_t *value)
 {
     uint8_t request[4];
@@ -121,23 +152,24 @@ static bool tmc_read_reg_unlocked(uint8_t slave, uint8_t reg, uint32_t *value)
     request[2] = (uint8_t)(reg & 0x7F);
     request[3] = tmc_crc8(request, 3);
 
-    tmc_flush_rx();
-    uart_write_bytes(TMC_UART, (const char *)request, sizeof(request));
-    uart_wait_tx_done(TMC_UART, pdMS_TO_TICKS(20));
+    for (int attempt = 0; attempt < TMC_READ_RETRIES; attempt++) {
+        tmc_flush_rx();
+        uart_write_bytes(TMC_UART, (const char *)request, sizeof(request));
+        uart_wait_tx_done(TMC_UART, pdMS_TO_TICKS(20));
+        /* Let the echo land and the driver start its reply (~2 ms). */
+        esp_rom_delay_us(2000);
 
-    uint8_t reply[8];
-    int len = uart_read_bytes(TMC_UART, reply, sizeof(reply), pdMS_TO_TICKS(8));
-    if (len != 8) {
-        return false;
+        uint8_t buf[24];
+        int len = uart_read_bytes(TMC_UART, buf, sizeof(buf), pdMS_TO_TICKS(TMC_READ_TIMEOUT_MS));
+        if (tmc_parse_read_reply(buf, len, request[2], value)) {
+            return true;
+        }
+        if (len > 0) {
+            ESP_LOGD(TAG, "addr %u reg 0x%02X: %d RX bytes, no 05 FF frame",
+                     (unsigned)slave, (unsigned)request[2], len);
+        }
     }
-    if (reply[0] != TMC_SYNC || tmc_crc8(reply, 7) != reply[7]) {
-        return false;
-    }
-    if (value != NULL) {
-        *value = ((uint32_t)reply[3] << 24) | ((uint32_t)reply[4] << 16) |
-                 ((uint32_t)reply[5] << 8) | (uint32_t)reply[6];
-    }
-    return true;
+    return false;
 }
 
 static void tmc_lock(void)
@@ -210,6 +242,7 @@ bool tmc_driver_init(void)
     ESP_ERROR_CHECK(uart_param_config(TMC_UART, &uart_config));
     ESP_ERROR_CHECK(uart_set_pin(TMC_UART, PIN_UART1_TX, PIN_UART1_RX,
                                  UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+    gpio_pullup_en(PIN_UART1_RX);
     tmc_uart_up = true;
 
     vTaskDelay(pdMS_TO_TICKS(20));
@@ -228,6 +261,16 @@ bool tmc_driver_init(void)
         ESP_LOGI(TAG, "TMC2209 UART configuration complete");
     } else {
         ESP_LOGW(TAG, "TMC2209 UART incomplete — motors still run from hardware pin config");
+        tmc_lock();
+        for (uint8_t addr = 0; addr < 4; addr++) {
+            uint32_t ioin = 0;
+            if (tmc_read_reg_unlocked(addr, TMC_REG_IOIN, &ioin)) {
+                ESP_LOGI(TAG, "UART scan: addr %u answered IOIN=0x%08lX version=0x%02X",
+                         (unsigned)addr, (unsigned long)ioin,
+                         (unsigned)((ioin >> 24) & 0xFF));
+            }
+        }
+        tmc_unlock();
     }
     return all_ok;
 }

@@ -108,6 +108,7 @@ button { padding: 10px 20px; margin: 5px; font-size: 16px; cursor: pointer; bord
 <h2>TMC UART / stallGuard test</h2>
 <p style="color:#666; font-size:14px;">
 Probe checks UART1 (GPIO22/21): IC version 0x21 = TMC2209, <b>write_ack</b> means IFCNT incremented so the driver actually heard a write.
+All-zero registers mean read-back failed (current is still the hardware VREF default). After UART is up, zoom should report IRUN=8 IHOLD=0.
 Live SG: jog ZOOM (or use the spin test) — SG_RESULT should be high while moving freely and drop near 0 at the lens stop. TSTEP at max means the motor is stopped and SG will not change.
 Hold current is now low at rest (zoom IHOLD=0); motors should not cook after days on. If tilt droops, raise TMC_IHOLD_TILT.
 Jog/preset zoom is stall-stopped if the lens hits a hard stop (same SG threshold as homing). After 6 hours idle the rig re-homes and returns to the pose it was holding.

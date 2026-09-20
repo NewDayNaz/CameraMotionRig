@@ -91,14 +91,15 @@
 
 /*
  * TMC2209 CS values 0–31. FYSETC E4 Rsense is ~0.11 Ω, vsense=0 (Vfs=0.325 V):
- * I_rms ≈ (CS+1)/32 * 0.325 / (0.11 * 1.414) → CS 16 ≈ 1.1 A, CS 4 ≈ 0.33 A.
+ * I_rms ≈ (CS+1)/32 * 0.325 / (0.11 * 1.414) → CS 16 ≈ 1.1 A, CS 11 ≈ 0.78 A, CS 8 ≈ 0.59 A, CS 4 ≈ 0.33 A.
  * Old IHOLD=8 at standstill for days is why the motors cooked.
  * Tilt keeps a little hold against gravity; zoom needs none at rest.
+ * Pan/tilt IRUN targets ~0.8 A (CS 11). Zoom stays lower — the lens ring does not need ~1 A.
  * After MOTOR_STANDBY_MS with no steps, currents drop again (STANDBY_*).
  */
-#define TMC_IRUN_PAN           16
-#define TMC_IRUN_TILT          16
-#define TMC_IRUN_ZOOM          14
+#define TMC_IRUN_PAN           11
+#define TMC_IRUN_TILT          11
+#define TMC_IRUN_ZOOM           8
 #define TMC_IHOLD_PAN           3
 #define TMC_IHOLD_TILT          4
 #define TMC_IHOLD_ZOOM          0

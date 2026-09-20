@@ -761,7 +761,7 @@ static esp_err_t api_tmc_diag_handler(httpd_req_t *req)
     cJSON_AddStringToObject(json, "status", ok_count > 0 ? "ok" : "error");
     if (ok_count == 0) {
         cJSON_AddStringToObject(json, "hint",
-            "No driver answered UART1 (GPIO22 TX / GPIO21 RX). Check the FYSETC E4 UART jumper/wiring and driver addresses.");
+            "No driver answered UART1 (GPIO22 TX / GPIO21 RX). Pins and addresses match the E4 schematic (PAN=1 TILT=3 ZOOM=0). If this is still all zeros after a firmware with echo-tolerant reads, nothing is on the MOT-UART bus.");
     } else if (ok_count < NUM_AXES) {
         cJSON_AddStringToObject(json, "hint",
             "Some axes did not ACK. Address map is PAN=1 TILT=3 ZOOM=0.");
