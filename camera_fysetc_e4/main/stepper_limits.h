@@ -8,13 +8,12 @@
  * leading edge of the magnet field (sensor not held). Homing direction is +
  * so useful travel is negative.
  *
- * ZOOM: no endstop. Home is stallGuard (or a single hard-stop crawl) against
- * the lens mechanical stop, then pull-off. Homing direction is − so useful
+ * ZOOM: no endstop. Temporary step-count home: drive HOMING_ZOOM_DIRECTION for
+ * HOME_ZOOM_DRIVE_STEPS, then declare origin. Homing direction is − so useful
  * travel is positive.
  *
  * Calibrate MAX_*_RANGE_STEPS by homing, jogging to the far stop, and reading
- * STATUS. Homing faults (does not invent zero) if the sensor/stall is not
- * seen within this range.
+ * STATUS. Pan/tilt homing faults if the sensor is not seen within this range.
  */
 
 #ifndef STEPPER_LIMITS_H
@@ -36,7 +35,7 @@
 
 #define HOMING_PAN_VELOCITY  200.0f
 #define HOMING_TILT_VELOCITY 200.0f
-#define HOMING_ZOOM_VELOCITY 50.0f   /* stallGuard needs some speed */
+#define HOMING_ZOOM_VELOCITY 50.0f
 
 #define HOMING_PAN_SLOW_VELOCITY  40.0f
 #define HOMING_TILT_SLOW_VELOCITY 40.0f
@@ -65,16 +64,17 @@
 #define HOME_SETTLE_MS               50
 #define DIR_SETUP_DELAY_US           20
 
-/* Zoom: one contact against the lens stop, then pull off. Do not retry. */
-#define HOME_ZOOM_STALL_IGNORE_STEPS  80   /* skip startup current spike */
-#define HOME_ZOOM_SG_POLL_MS          25
-#define HOME_ZOOM_SG_HITS              3   /* consecutive low SG_RESULT polls */
-#define HOME_ZOOM_SG_STALL_MAX        20   /* 0–1023; lower = only a hard stall */
-#define HOME_ZOOM_PULLOFF_STEPS       40   /* off the glass stop before origin */
+/* Zoom: temporary step-count home (stallGuard disabled). Drive this many
+ * steps toward wide, then set origin. Keep short so we don't grind the stop;
+ * ~10 s at HOMING_ZOOM_VELOCITY. Soft travel limit stays MAX_ZOOM_RANGE_STEPS. */
+#define HOME_ZOOM_DRIVE_STEPS         500
 
-/* Live zoom stall-stop (jog / preset). Same SG threshold as homing.
+/* Live zoom stall-stop (jog / preset). Same SG threshold as former homing.
  * Ignore a short run-up and direction changes so startup/backlash does not
  * look like a lens hit. TSTEP at 0xFFFFF means the TMC is not stepping. */
+#define HOME_ZOOM_SG_POLL_MS          25
+#define HOME_ZOOM_SG_HITS              3
+#define HOME_ZOOM_SG_STALL_MAX        20   /* 0–1023; lower = only a hard stall */
 #define HOME_ZOOM_LIVE_IGNORE_STEPS   40
 #define HOME_ZOOM_LIVE_SG_MIN_VEL     25.0f
 #define HOME_ZOOM_LIVE_TSTEP_MAX      0x000FFFFEu

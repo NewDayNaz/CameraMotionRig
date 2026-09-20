@@ -4,8 +4,8 @@
  *
  * Repeatability rules:
  * - PAN/TILT origin: magnetic sensor leading edge after debounce + pull-off
- * - ZOOM origin: stallGuard (or one hard-stop crawl) then pull-off — never retry
- * - Homing miss faults the axis; it never invents position 0
+ * - ZOOM origin: temporary step-count crawl (HOME_ZOOM_DRIVE_STEPS) then zero
+ * - Homing miss faults pan/tilt; zoom invents zero after the drive completes
  * - Arrival is counted pulses, never a software snap to target
  * - SAVE/GOTO require homed and (for SAVE) idle
  * - Zoom stallGuard during jog/preset is a crash stop (fault, clear homed)
@@ -44,8 +44,7 @@ typedef enum {
     HOME_PHASE_PULLOFF,
     HOME_PHASE_SLOW_SEEK,
     HOME_PHASE_FINAL_PULLOFF,
-    HOME_PHASE_STALL_SEEK,
-    HOME_PHASE_STALL_PULLOFF,
+    HOME_PHASE_RANGE_DRIVE, /* zoom: drive N steps, then settle as origin */
     HOME_PHASE_SETTLE,
 } home_phase_t;
 
@@ -73,8 +72,6 @@ static int32_t home_phase_steps = 0;
 static int32_t home_extra_start_steps = 0;
 static bool home_extra_counting = false;
 static int home_settle_ticks = 0;
-static int home_sg_poll_ticks = 0;
-static uint8_t home_sg_hits = 0;
 static bool axis_fault[NUM_AXES];
 static bool motors_standby = false;
 static int64_t last_motion_us = 0;
@@ -417,8 +414,6 @@ static void begin_home_phase(home_phase_t phase, bool toward_switch, bool slow)
     home_extra_start_steps = 0;
     home_extra_counting = false;
     home_settle_ticks = 0;
-    home_sg_poll_ticks = 0;
-    home_sg_hits = 0;
     if (phase != HOME_PHASE_SETTLE) {
         set_homing_velocity(homing_axis, toward_switch, slow);
     } else {
@@ -516,14 +511,12 @@ static void start_homing_axis(uint8_t axis)
     home_debounce = 0;
     home_phase_steps = 0;
     home_extra_counting = false;
-    home_sg_poll_ticks = 0;
-    home_sg_hits = 0;
     halt_axis(axis);
 
     if (!axis_has_endstop(axis)) {
-        ESP_LOGI(TAG, "Homing %s against lens hard stop (stallGuard, one contact)",
-                 axis_names[axis]);
-        begin_home_phase(HOME_PHASE_STALL_SEEK, true, false);
+        ESP_LOGI(TAG, "Homing %s by step count (%ld steps)",
+                 axis_names[axis], (long)HOME_ZOOM_DRIVE_STEPS);
+        begin_home_phase(HOME_PHASE_RANGE_DRIVE, true, false);
         return;
     }
 
@@ -545,62 +538,19 @@ static bool extra_travel_done(int32_t extra_steps)
     return (home_phase_steps - home_extra_start_steps) >= extra_steps;
 }
 
-static void zoom_begin_pulloff(uint8_t axis, const char *why)
-{
-    halt_axis(axis);
-    ESP_LOGI(TAG, "ZOOM: %s after %ld steps — single pull-off, no retry",
-             why, (long)home_phase_steps);
-    begin_home_phase(HOME_PHASE_STALL_PULLOFF, false, true);
-}
-
 static void update_zoom_home(uint8_t axis, int32_t range)
 {
-    if (home_phase == HOME_PHASE_STALL_SEEK) {
-        if (home_phase_steps >= range) {
-            /* Drove the full travel into the stop once. Pull off; do not seek again. */
-            ESP_LOGW(TAG, "ZOOM: no stallGuard hit within range — treating far stop as home");
-            zoom_begin_pulloff(axis, "range reached at hard stop");
-            return;
-        }
-
-        if (home_phase_steps < HOME_ZOOM_STALL_IGNORE_STEPS) {
-            return;
-        }
-        if (!tmc_driver_is_ready()) {
-            return;
-        }
-
-        home_sg_poll_ticks++;
-        if (home_sg_poll_ticks < HOME_ZOOM_SG_POLL_MS) {
-            return;
-        }
-        home_sg_poll_ticks = 0;
-
-        uint16_t sg = 0;
-        if (!tmc_driver_read_sg_result(axis, &sg)) {
-            return;
-        }
-        if (sg <= HOME_ZOOM_SG_STALL_MAX) {
-            home_sg_hits++;
-            if (home_sg_hits >= HOME_ZOOM_SG_HITS) {
-                ESP_LOGI(TAG, "ZOOM stallGuard SG=%u (threshold %d)",
-                         (unsigned)sg, HOME_ZOOM_SG_STALL_MAX);
-                zoom_begin_pulloff(axis, "stallGuard");
-            }
-            return;
-        }
-        home_sg_hits = 0;
+    (void)range;
+    if (home_phase != HOME_PHASE_RANGE_DRIVE) {
         return;
     }
-
-    if (home_phase == HOME_PHASE_STALL_PULLOFF) {
-        if (home_phase_steps >= HOME_PULLOFF_MAX_STEPS) {
-            begin_home_phase(HOME_PHASE_SETTLE, false, true);
-            return;
-        }
-        if (extra_travel_done(HOME_ZOOM_PULLOFF_STEPS)) {
-            begin_home_phase(HOME_PHASE_SETTLE, false, true);
-        }
+    /* Temporary: drive a fixed count toward wide, then declare origin. */
+    if (home_phase_steps >= HOME_ZOOM_DRIVE_STEPS) {
+        halt_axis(axis);
+        ESP_LOGW(TAG,
+                 "ZOOM: drove %ld steps — assuming current position as home",
+                 (long)home_phase_steps);
+        begin_home_phase(HOME_PHASE_SETTLE, false, true);
     }
 }
 
