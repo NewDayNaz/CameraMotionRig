@@ -652,6 +652,8 @@ function probeTmc() {
     lines.push(data.hint || '');
     lines.push('uart_installed=' + data.uart_installed + ' configured=' + data.configured +
       ' homing_SG_threshold=' + data.sg_stall_threshold);
+    lines.push('bus_echo tx=' + data.bus_echo_tx + ' rx=' + data.bus_echo_rx +
+      ' hex=' + (data.bus_echo_hex || '(none)'));
     (data.axes || []).forEach(a => {
       lines.push('');
       lines.push(a.axis + ' addr=' + a.address +
@@ -662,9 +664,10 @@ function probeTmc() {
         ' IHOLD=' + a.ihold + ' IRUN=' + a.irun);
       lines.push('  TCOOLTHRS=' + a.tcoolthrs + ' SGTHRS=' + a.sgthrs +
         ' SG_RESULT=' + a.sg_result + ' TSTEP=' + a.tstep +
-        (a.motor_looks_stopped ? ' (stopped)' : ' (moving)'));
+        (a.motor_looks_stopped ? ' (stopped)' : (a.uart_ok ? ' (moving)' : '')));
       lines.push('  IFCNT ' + a.ifcnt_before + ' -> ' + a.ifcnt_after +
         (a.write_ack ? ' WRITE OK' : ' WRITE NOT ACKED'));
+      lines.push('  RX ' + a.rx_len + ' bytes: ' + (a.rx_hex || '(none)'));
     });
     log.textContent = lines.join('\n');
     const zoom = (data.axes || []).find(a => a.axis === 'ZOOM');

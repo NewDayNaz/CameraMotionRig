@@ -33,7 +33,15 @@ typedef struct {
     uint32_t ihold_irun;
     uint8_t ihold;
     uint8_t irun;
+    int rx_len;            /* raw bytes seen on the GCONF read (0 = RX silent) */
+    char rx_hex[48];       /* first raw RX bytes, space-separated hex */
 } tmc_diag_t;
+
+typedef struct {
+    int tx_len;
+    int rx_len;
+    char rx_hex[48];
+} tmc_loopback_t;
 
 bool tmc_driver_init(void);
 bool tmc_driver_is_ready(void);
@@ -42,6 +50,7 @@ bool tmc_driver_uart_installed(void);
 bool tmc_driver_read_sg_result(uint8_t axis, uint16_t *sg_result);
 bool tmc_driver_read_sg_tstep(uint8_t axis, uint16_t *sg_result, uint32_t *tstep);
 bool tmc_driver_diagnose_axis(uint8_t axis, tmc_diag_t *out);
+bool tmc_driver_bus_echo(tmc_loopback_t *out);
 bool tmc_driver_reconfigure(void);
 
 /** RUN currents (motion) vs extra-low standstill after long idle. */

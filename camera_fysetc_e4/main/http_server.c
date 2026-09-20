@@ -734,7 +734,9 @@ static void tmc_diag_to_json(cJSON *obj, const tmc_diag_t *d)
     cJSON_AddNumberToObject(obj, "chopconf", (double)d->chopconf);
     cJSON_AddNumberToObject(obj, "ihold", d->ihold);
     cJSON_AddNumberToObject(obj, "irun", d->irun);
-    cJSON_AddBoolToObject(obj, "motor_looks_stopped", d->tstep >= 0xFFFF0);
+    cJSON_AddNumberToObject(obj, "rx_len", d->rx_len);
+    cJSON_AddStringToObject(obj, "rx_hex", d->rx_hex[0] ? d->rx_hex : "");
+    cJSON_AddBoolToObject(obj, "motor_looks_stopped", d->uart_ok && d->tstep >= 0xFFFF0);
 }
 
 static esp_err_t api_tmc_diag_handler(httpd_req_t *req)
@@ -745,13 +747,24 @@ static esp_err_t api_tmc_diag_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(json, "sg_stall_threshold", HOME_ZOOM_SG_STALL_MAX);
     cJSON_AddNumberToObject(json, "sgthrs_zoom_config", 60);
 
+    tmc_loopback_t echo;
+    bool echo_ok = tmc_driver_bus_echo(&echo);
+    cJSON_AddNumberToObject(json, "bus_echo_tx", echo.tx_len);
+    cJSON_AddNumberToObject(json, "bus_echo_rx", echo.rx_len);
+    cJSON_AddStringToObject(json, "bus_echo_hex", echo.rx_hex[0] ? echo.rx_hex : "");
+    cJSON_AddBoolToObject(json, "bus_echo_ok", echo_ok);
+
     cJSON *axes_json = cJSON_CreateArray();
     int ok_count = 0;
+    int rx_any = echo.rx_len;
     for (uint8_t i = 0; i < NUM_AXES; i++) {
         tmc_diag_t d;
         tmc_driver_diagnose_axis(i, &d);
         if (d.uart_ok) {
             ok_count++;
+        }
+        if (d.rx_len > rx_any) {
+            rx_any = d.rx_len;
         }
         cJSON *ax = cJSON_CreateObject();
         tmc_diag_to_json(ax, &d);
@@ -760,8 +773,13 @@ static esp_err_t api_tmc_diag_handler(httpd_req_t *req)
     cJSON_AddItemToObject(json, "axes", axes_json);
     cJSON_AddStringToObject(json, "status", ok_count > 0 ? "ok" : "error");
     if (ok_count == 0) {
-        cJSON_AddStringToObject(json, "hint",
-            "No driver answered UART1 (GPIO22 TX / GPIO21 RX). Pins and addresses match the E4 schematic (PAN=1 TILT=3 ZOOM=0). If this is still all zeros after a firmware with echo-tolerant reads, nothing is on the MOT-UART bus.");
+        if (rx_any == 0) {
+            cJSON_AddStringToObject(json, "hint",
+                "UART RX is silent (not even TX echo). Bytes never left the ESP32 FIFO, or GPIO21 is not on MOT-UART. Reflash this build (RX threshold + open-drain TX) and probe again.");
+        } else {
+            cJSON_AddStringToObject(json, "hint",
+                "UART RX sees bytes but no valid TMC 05 FF reply. TX/RX are tied (echo) but the drivers are not answering — check 24V motor power and that PDN is on the bus.");
+        }
     } else if (ok_count < NUM_AXES) {
         cJSON_AddStringToObject(json, "hint",
             "Some axes did not ACK. Address map is PAN=1 TILT=3 ZOOM=0.");

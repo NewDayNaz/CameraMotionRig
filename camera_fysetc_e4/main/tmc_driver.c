@@ -14,7 +14,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "soc/gpio_struct.h"
 
+#include <stdio.h>
 #include <string.h>
 
 static const char *TAG = "tmc_driver";
@@ -75,6 +77,8 @@ static uint32_t axis_ihold_irun(uint8_t axis, bool standby)
 static bool tmc_uart_up = false;
 static bool tmc_ready = false;
 static SemaphoreHandle_t tmc_mutex;
+static int s_last_rx_len;
+static uint8_t s_last_rx[24];
 
 static uint8_t tmc_crc8(const uint8_t *data, size_t nbytes)
 {
@@ -96,6 +100,49 @@ static uint8_t tmc_crc8(const uint8_t *data, size_t nbytes)
 static void tmc_flush_rx(void)
 {
     uart_flush_input(TMC_UART);
+}
+
+static void tmc_bytes_to_hex(char *dst, size_t dst_sz, const uint8_t *src, int n)
+{
+    if (dst == NULL || dst_sz == 0) {
+        return;
+    }
+    dst[0] = '\0';
+    if (src == NULL || n <= 0) {
+        return;
+    }
+    size_t used = 0;
+    for (int i = 0; i < n; i++) {
+        int written = snprintf(dst + used, dst_sz - used, "%s%02X", (i == 0) ? "" : " ", src[i]);
+        if (written < 0 || (size_t)written >= dst_sz - used) {
+            dst[dst_sz - 1] = '\0';
+            return;
+        }
+        used += (size_t)written;
+    }
+}
+
+/* First byte waits up to first_wait; remaining bytes drain with a short idle gap.
+ * Asking uart_read_bytes() for 24 bytes at once can miss short TMC frames sitting
+ * in the HW FIFO until rx_full_threshold (default 120) or RX timeout fires. */
+static int tmc_uart_collect(uint8_t *buf, int max_len, TickType_t first_wait)
+{
+    if (buf == NULL || max_len <= 0) {
+        return 0;
+    }
+    int n = uart_read_bytes(TMC_UART, buf, 1, first_wait);
+    if (n <= 0) {
+        return 0;
+    }
+    int len = n;
+    while (len < max_len) {
+        n = uart_read_bytes(TMC_UART, buf + len, (uint32_t)(max_len - len), pdMS_TO_TICKS(5));
+        if (n <= 0) {
+            break;
+        }
+        len += n;
+    }
+    return len;
 }
 
 static bool tmc_write_reg_unlocked(uint8_t slave, uint8_t reg, uint32_t value)
@@ -156,11 +203,20 @@ static bool tmc_read_reg_unlocked(uint8_t slave, uint8_t reg, uint32_t *value)
         tmc_flush_rx();
         uart_write_bytes(TMC_UART, (const char *)request, sizeof(request));
         uart_wait_tx_done(TMC_UART, pdMS_TO_TICKS(20));
-        /* Let the echo land and the driver start its reply (~2 ms). */
-        esp_rom_delay_us(2000);
+        /* Reply starts within a few bit times; echo is already in the FIFO. */
+        esp_rom_delay_us(200);
 
         uint8_t buf[24];
-        int len = uart_read_bytes(TMC_UART, buf, sizeof(buf), pdMS_TO_TICKS(TMC_READ_TIMEOUT_MS));
+        int len = tmc_uart_collect(buf, (int)sizeof(buf), pdMS_TO_TICKS(TMC_READ_TIMEOUT_MS));
+        s_last_rx_len = len;
+        memset(s_last_rx, 0, sizeof(s_last_rx));
+        if (len > 0) {
+            int copy = len;
+            if (copy > (int)sizeof(s_last_rx)) {
+                copy = (int)sizeof(s_last_rx);
+            }
+            memcpy(s_last_rx, buf, (size_t)copy);
+        }
         if (tmc_parse_read_reply(buf, len, request[2], value)) {
             return true;
         }
@@ -242,6 +298,13 @@ bool tmc_driver_init(void)
     ESP_ERROR_CHECK(uart_param_config(TMC_UART, &uart_config));
     ESP_ERROR_CHECK(uart_set_pin(TMC_UART, PIN_UART1_TX, PIN_UART1_RX,
                                  UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+    /* Short TMC replies never fill the default 120-byte RX FIFO threshold. */
+    (void)uart_set_rx_full_threshold(TMC_UART, 1);
+    (void)uart_set_rx_timeout(TMC_UART, 3);
+    /* Open-drain TX so a TMC can pull PDN low against idle-high. Do not
+     * gpio_set_direction() here — that would detach the UART matrix. */
+    GPIO.pin[PIN_UART1_TX].pad_driver = 1;
+    gpio_pullup_en(PIN_UART1_TX);
     gpio_pullup_en(PIN_UART1_RX);
     tmc_uart_up = true;
 
@@ -318,6 +381,8 @@ bool tmc_driver_diagnose_axis(uint8_t axis, tmc_diag_t *out)
     tmc_lock();
 
     out->uart_ok = tmc_read_reg_unlocked(slave, TMC_REG_GCONF, &out->gconf);
+    out->rx_len = s_last_rx_len;
+    tmc_bytes_to_hex(out->rx_hex, sizeof(out->rx_hex), s_last_rx, s_last_rx_len);
     tmc_read_reg_unlocked(slave, TMC_REG_GSTAT, &out->gstat);
     tmc_read_reg_unlocked(slave, TMC_REG_IOIN, &out->ioin);
     out->ic_version = (uint8_t)((out->ioin >> 24) & 0xFF);
@@ -345,6 +410,31 @@ bool tmc_driver_diagnose_axis(uint8_t axis, tmc_diag_t *out)
 
     tmc_unlock();
     return out->uart_ok;
+}
+
+bool tmc_driver_bus_echo(tmc_loopback_t *out)
+{
+    if (out == NULL) {
+        return false;
+    }
+    memset(out, 0, sizeof(*out));
+    if (!tmc_uart_up) {
+        return false;
+    }
+
+    const uint8_t probe[4] = { 0xA5, 0x5A, 0xC3, 0x3C };
+    uint8_t buf[16];
+    tmc_lock();
+    tmc_flush_rx();
+    int written = uart_write_bytes(TMC_UART, (const char *)probe, sizeof(probe));
+    uart_wait_tx_done(TMC_UART, pdMS_TO_TICKS(20));
+    int len = tmc_uart_collect(buf, (int)sizeof(buf), pdMS_TO_TICKS(20));
+    tmc_unlock();
+
+    out->tx_len = written;
+    out->rx_len = len;
+    tmc_bytes_to_hex(out->rx_hex, sizeof(out->rx_hex), buf, len);
+    return len > 0;
 }
 
 bool tmc_driver_reconfigure(void)
