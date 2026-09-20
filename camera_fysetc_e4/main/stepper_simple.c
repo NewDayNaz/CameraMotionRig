@@ -217,6 +217,26 @@ static float get_default_preset_speed(uint8_t axis)
     return PRESET_PAN_TILT_VELOCITY;
 }
 
+static int32_t get_pulloff_steps(uint8_t axis)
+{
+    return (axis == AXIS_TILT) ? HOME_TILT_PULLOFF_STEPS : HOME_PULLOFF_STEPS;
+}
+
+static int32_t get_final_pulloff_steps(uint8_t axis)
+{
+    return (axis == AXIS_TILT) ? HOME_TILT_FINAL_PULLOFF_STEPS : HOME_FINAL_PULLOFF_STEPS;
+}
+
+static int32_t get_backoff_extra_steps(uint8_t axis)
+{
+    return (axis == AXIS_TILT) ? HOME_TILT_BACKOFF_EXTRA_STEPS : HOME_BACKOFF_EXTRA_STEPS;
+}
+
+static int32_t get_pulloff_max_steps(uint8_t axis)
+{
+    return (axis == AXIS_TILT) ? HOME_TILT_PULLOFF_MAX_STEPS : HOME_PULLOFF_MAX_STEPS;
+}
+
 static bool axis_has_endstop(uint8_t axis)
 {
     return endstop_pins[axis] != GPIO_NUM_NC;
@@ -633,7 +653,7 @@ static void update_homing(void)
         if (home_debounce < HOME_DEBOUNCE_SAMPLES) {
             return;
         }
-        if (extra_travel_done(HOME_BACKOFF_EXTRA_STEPS)) {
+        if (extra_travel_done(get_backoff_extra_steps(axis))) {
             begin_home_phase(HOME_PHASE_FAST_SEEK, true, false);
         }
         return;
@@ -666,7 +686,7 @@ static void update_homing(void)
     }
 
     if (home_phase == HOME_PHASE_PULLOFF || home_phase == HOME_PHASE_FINAL_PULLOFF) {
-        if (home_phase_steps >= HOME_PULLOFF_MAX_STEPS) {
+        if (home_phase_steps >= get_pulloff_max_steps(axis)) {
             fail_current_home("pull-off: magnet still in sensor field");
             return;
         }
@@ -680,8 +700,8 @@ static void update_homing(void)
             return;
         }
         int32_t extra = (home_phase == HOME_PHASE_PULLOFF)
-                            ? HOME_PULLOFF_STEPS
-                            : HOME_FINAL_PULLOFF_STEPS;
+                            ? get_pulloff_steps(axis)
+                            : get_final_pulloff_steps(axis);
         if (extra_travel_done(extra)) {
             if (home_phase == HOME_PHASE_PULLOFF) {
                 begin_home_phase(HOME_PHASE_SLOW_SEEK, true, true);

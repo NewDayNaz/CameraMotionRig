@@ -24,7 +24,7 @@
 #define MIN_ZOOM_VELOCITY 10.0f
 
 #define MAX_PAN_VELOCITY 1000.0f
-#define MAX_TILT_VELOCITY 1000.0f
+#define MAX_TILT_VELOCITY 1200.0f  /* a bit faster than pan — tilt gearing feels slower */
 #define MAX_ZOOM_VELOCITY 130.0f
 
 #define MAX_PAN_RANGE_STEPS   18400
@@ -57,6 +57,11 @@
 #define HOME_FINAL_PULLOFF_STEPS     24    /* origin slightly off the magnet */
 #define HOME_BACKOFF_EXTRA_STEPS     48
 #define HOME_PULLOFF_MAX_STEPS      600
+/* Tilt magnet/sensor lobe is wider — needs more travel to leave the field. */
+#define HOME_TILT_PULLOFF_STEPS          120
+#define HOME_TILT_FINAL_PULLOFF_STEPS     64
+#define HOME_TILT_BACKOFF_EXTRA_STEPS     96
+#define HOME_TILT_PULLOFF_MAX_STEPS     1500
 #define HOME_SETTLE_MS               50
 #define DIR_SETUP_DELAY_US           20
 
