@@ -10,6 +10,7 @@
 #include "wifi_manager.h"
 #include "board.h"
 #include "tmc_driver.h"
+#include "zoom_cal.h"
 
 // Maximum velocities for web UI (steps/sec) - use limits from stepper_limits.h
 #define MAX_VELOCITY_PAN  MAX_PAN_VELOCITY
@@ -24,18 +25,26 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 static const char* TAG = "http_server";
 static httpd_handle_t server_handle = NULL;
+static int s_zoom_cal_drive = -1; /* -1 idle, else ZOOM_CAL_WIDE / TELE */
+
+static void zoom_cal_clear_drive_state(void)
+{
+    s_zoom_cal_drive = -1;
+    stepper_simple_set_zoom_limit_holdoff(false);
+}
 
 // Web UI HTML (embedded) - auto-generated from web_ui.html
 #include "web_ui_html.h"
 
 // Handler for root path - serve HTML page
 static esp_err_t root_handler(httpd_req_t *req) {
-    httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
     
     // Format slider inputs using macro values
     char slider_pan[128], slider_tilt[128], slider_zoom[128];
@@ -159,6 +168,31 @@ static esp_err_t api_positions_handler(httpd_req_t *req) {
     cJSON_AddBoolToObject(faults, "zoom", st.axis_fault[AXIS_ZOOM]);
     cJSON_AddItemToObject(json, "faults", faults);
 
+    cJSON_AddNumberToObject(json, "zoom_soft_min", (double)st.zoom_soft_min);
+    cJSON_AddNumberToObject(json, "zoom_soft_max", (double)st.zoom_soft_max);
+    cJSON_AddBoolToObject(json, "zoom_cal_valid", st.zoom_cal_valid);
+    cJSON_AddBoolToObject(json, "zoom_sg_live", st.zoom_sg_live);
+    cJSON_AddNumberToObject(json, "zoom_sg_stall_max", (double)st.zoom_sg_stall_max);
+    {
+        const zoom_cal_t *cal = zoom_cal_get();
+        int32_t span = (cal != NULL) ? cal->span_steps : 0;
+        cJSON_AddNumberToObject(json, "zoom_span", (double)span);
+        if (st.zoom_cal_valid && span > 0) {
+            double pct = 100.0 * (double)st.position[AXIS_ZOOM] / (double)span;
+            if (pct < 0.0) {
+                pct = 0.0;
+            }
+            if (pct > 100.0) {
+                pct = 100.0;
+            }
+            cJSON_AddNumberToObject(json, "zoom_pct", pct);
+        }
+        cJSON_AddNumberToObject(json, "zoom_pwm_thresh", zoom_cal_pwm_thresh());
+    }
+    cJSON_AddNumberToObject(json, "pan_irun", tmc_driver_get_irun(AXIS_PAN));
+    cJSON_AddNumberToObject(json, "tilt_irun", tmc_driver_get_irun(AXIS_TILT));
+    cJSON_AddNumberToObject(json, "zoom_irun", tmc_driver_get_irun(AXIS_ZOOM));
+
     char *json_string = cJSON_Print(json);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, json_string, strlen(json_string));
@@ -238,6 +272,7 @@ static esp_err_t api_command_handler(httpd_req_t *req) {
         stepper_simple_home();
         success = true;
     } else if (strcmp(command, "stop") == 0) {
+        zoom_cal_clear_drive_state();
         stepper_simple_stop();
         success = true;
     }
@@ -734,6 +769,7 @@ static void tmc_diag_to_json(cJSON *obj, const tmc_diag_t *d)
     cJSON_AddNumberToObject(obj, "chopconf", (double)d->chopconf);
     cJSON_AddNumberToObject(obj, "ihold", d->ihold);
     cJSON_AddNumberToObject(obj, "irun", d->irun);
+    cJSON_AddNumberToObject(obj, "pwm_scale_sum", d->pwm_scale_sum);
     cJSON_AddNumberToObject(obj, "rx_len", d->rx_len);
     cJSON_AddStringToObject(obj, "rx_hex", d->rx_hex[0] ? d->rx_hex : "");
     cJSON_AddBoolToObject(obj, "motor_looks_stopped", d->uart_ok && d->tstep >= 0xFFFF0);
@@ -753,18 +789,24 @@ static esp_err_t api_tmc_diag_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(json, "bus_echo_rx", echo.rx_len);
     cJSON_AddStringToObject(json, "bus_echo_hex", echo.rx_hex[0] ? echo.rx_hex : "");
     cJSON_AddBoolToObject(json, "bus_echo_ok", echo_ok);
+    cJSON_AddNumberToObject(json, "loopback_rx", echo.loopback_rx);
+    cJSON_AddNumberToObject(json, "hw_rxfifo", echo.hw_rxfifo);
+    cJSON_AddBoolToObject(json, "tx_done", echo.tx_done);
+    cJSON_AddNumberToObject(json, "gpio21_idle", echo.gpio21_idle);
+    cJSON_AddNumberToObject(json, "gpio22_idle", echo.gpio22_idle);
+    cJSON_AddNumberToObject(json, "gpio21_when_tx_low", echo.gpio21_tx_low);
+    cJSON_AddNumberToObject(json, "gpio21_when_tx_high", echo.gpio21_tx_high);
+    cJSON_AddBoolToObject(json, "pins_tied", echo.pins_tied);
+    cJSON_AddNumberToObject(json, "uart_out_sel_tx", echo.out_sel_tx);
+    cJSON_AddNumberToObject(json, "uart_in_sel_rx", echo.in_sel_rx);
 
     cJSON *axes_json = cJSON_CreateArray();
     int ok_count = 0;
-    int rx_any = echo.rx_len;
     for (uint8_t i = 0; i < NUM_AXES; i++) {
         tmc_diag_t d;
         tmc_driver_diagnose_axis(i, &d);
         if (d.uart_ok) {
             ok_count++;
-        }
-        if (d.rx_len > rx_any) {
-            rx_any = d.rx_len;
         }
         cJSON *ax = cJSON_CreateObject();
         tmc_diag_to_json(ax, &d);
@@ -773,12 +815,24 @@ static esp_err_t api_tmc_diag_handler(httpd_req_t *req)
     cJSON_AddItemToObject(json, "axes", axes_json);
     cJSON_AddStringToObject(json, "status", ok_count > 0 ? "ok" : "error");
     if (ok_count == 0) {
-        if (rx_any == 0) {
+        if (echo.rx_len > 0) {
             cJSON_AddStringToObject(json, "hint",
-                "UART RX is silent (not even TX echo). Bytes never left the ESP32 FIFO, or GPIO21 is not on MOT-UART. Reflash this build (RX threshold + open-drain TX) and probe again.");
+                "UART RX sees bytes but no valid TMC 05 FF reply. TX/RX are tied (echo) but the drivers are not answering. Check 24V motor power and that PDN is on the bus.");
+        } else if (echo.loopback_rx <= 0) {
+            cJSON_AddStringToObject(json, "hint",
+                "UART1 internal loopback got 0 bytes. The ESP32 UART driver is not delivering RX even with GPIO out of the picture. This is not a TMC or MOT-UART wiring fault.");
+        } else if (echo.gpio21_tx_low == 1 && echo.gpio21_tx_high == 1) {
+            cJSON_AddStringToObject(json, "hint",
+                "GPIO22 does not reach GPIO21. UART1 is not on the TMC PDN bus. On the 3-column header under the ESP32 (antenna at top): left=P17 USART1 (silk often says I2C, GPIO21/22), center=P18 TMC PDN, right=P13 USB TX/RX/5V/G. Fit two shunt jumpers between P17 and P18. Leave P13 open. Do not short TX to RX.");
+        } else if (echo.gpio21_tx_low == 0 && echo.gpio21_tx_high == 0) {
+            cJSON_AddStringToObject(json, "hint",
+                "GPIO21 stays low when GPIO22 is driven high. PDN is stuck low (short, or a TMC holding the bus).");
+        } else if (echo.hw_rxfifo <= 0) {
+            cJSON_AddStringToObject(json, "hint",
+                "UART core and GPIO21/22 pads are fine, but UART1 RX FIFO stayed empty. GPIO21 is not routed into UART1 RX (matrix in_sel should be 21, out_sel on GPIO22 should be 17).");
         } else {
             cJSON_AddStringToObject(json, "hint",
-                "UART RX sees bytes but no valid TMC 05 FF reply. TX/RX are tied (echo) but the drivers are not answering — check 24V motor power and that PDN is on the bus.");
+                "Bytes reached the UART1 RX FIFO but uart_read_bytes() still returned 0. RX ISR/threshold is still broken.");
         }
     } else if (ok_count < NUM_AXES) {
         cJSON_AddStringToObject(json, "hint",
@@ -849,7 +903,7 @@ static esp_err_t api_tmc_sg_sample_handler(httpd_req_t *req)
     uint8_t axis = AXIS_ZOOM;
     int samples = 30;
     int interval_ms = 50;
-    float velocity = 50.0f;
+    float velocity = 120.0f;
 
     cJSON *json = cJSON_Parse(content);
     if (json) {
@@ -891,8 +945,19 @@ static esp_err_t api_tmc_sg_sample_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
+    /* Unidirectional spin walks into the rubber zoom ring and skips.
+     * Start away from the nearer soft limit when homed, then reverse halfway. */
+    float dir = 1.0f;
+    if (axis == AXIS_ZOOM && stepper_simple_is_homed()) {
+        float pan_pos = 0.0f, tilt_pos = 0.0f, zoom_pos = 0.0f;
+        stepper_simple_get_positions(&pan_pos, &tilt_pos, &zoom_pos);
+        if (zoom_pos > (float)MAX_ZOOM_RANGE_STEPS * 0.5f) {
+            dir = -1.0f;
+        }
+    }
     float vels[3] = {0, 0, 0};
-    vels[axis] = velocity;
+    vels[axis] = velocity * dir;
+    int reverse_at = samples / 2;
     stepper_simple_set_velocities(vels[0], vels[1], vels[2]);
 
     cJSON *response = cJSON_CreateObject();
@@ -902,12 +967,22 @@ static esp_err_t api_tmc_sg_sample_handler(httpd_req_t *req)
     uint16_t sg_max = 0;
     unsigned long sg_sum = 0;
     int stall_hits = 0;
+    uint32_t tstep_min = 0xFFFFFFFFu;
+    uint32_t tstep_max = 0;
 
     for (int i = 0; i < samples; i++) {
+        if (i == reverse_at) {
+            vels[axis] = -vels[axis];
+            stepper_simple_set_velocities(vels[0], vels[1], vels[2]);
+            /* Slew through zero; TSTEP spikes here and is not a stall. */
+            vTaskDelay(pdMS_TO_TICKS(200));
+        }
         vTaskDelay(pdMS_TO_TICKS(interval_ms));
+        stepper_simple_set_velocities(vels[0], vels[1], vels[2]);
         uint16_t sg = 0;
         uint32_t tstep = 0;
-        if (tmc_driver_read_sg_tstep(axis, &sg, &tstep)) {
+        uint8_t pwm_sum = 0;
+        if (tmc_driver_read_sg_tstep_pwm(axis, &sg, &tstep, &pwm_sum)) {
             ok_n++;
             if (sg < sg_min) {
                 sg_min = sg;
@@ -916,12 +991,21 @@ static esp_err_t api_tmc_sg_sample_handler(httpd_req_t *req)
                 sg_max = sg;
             }
             sg_sum += sg;
+            if (tstep <= 6000u) {
+                if (tstep < tstep_min) {
+                    tstep_min = tstep;
+                }
+                if (tstep > tstep_max) {
+                    tstep_max = tstep;
+                }
+            }
             if (sg <= HOME_ZOOM_SG_STALL_MAX) {
                 stall_hits++;
             }
             cJSON *pt = cJSON_CreateObject();
             cJSON_AddNumberToObject(pt, "sg", sg);
             cJSON_AddNumberToObject(pt, "tstep", (double)tstep);
+            cJSON_AddNumberToObject(pt, "pwm_scale_sum", pwm_sum);
             cJSON_AddItemToArray(arr, pt);
         }
     }
@@ -938,6 +1022,8 @@ static esp_err_t api_tmc_sg_sample_handler(httpd_req_t *req)
         cJSON_AddNumberToObject(response, "sg_max", sg_max);
         cJSON_AddNumberToObject(response, "sg_avg", (double)sg_sum / (double)ok_n);
         cJSON_AddNumberToObject(response, "stall_hits", stall_hits);
+        cJSON_AddNumberToObject(response, "tstep_min", (double)tstep_min);
+        cJSON_AddNumberToObject(response, "tstep_max", (double)tstep_max);
     }
     cJSON_AddItemToObject(response, "points", arr);
 
@@ -946,6 +1032,267 @@ static esp_err_t api_tmc_sg_sample_handler(httpd_req_t *req)
     httpd_resp_send(req, s, strlen(s));
     free(s);
     cJSON_Delete(response);
+    return ESP_OK;
+}
+
+static void json_add_zoom_band(cJSON *parent, const char *name, const zoom_cal_band_t *b)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "captured", b->captured != 0);
+    cJSON_AddNumberToObject(o, "sg_min", b->sg_min);
+    cJSON_AddNumberToObject(o, "sg_max", b->sg_max);
+    cJSON_AddNumberToObject(o, "sg_avg", (double)b->sg_avg_x10 / 10.0);
+    cJSON_AddNumberToObject(o, "pwm_min", b->pwm_min);
+    cJSON_AddNumberToObject(o, "pwm_max", b->pwm_max);
+    cJSON_AddNumberToObject(o, "samples_ok", b->samples_ok);
+    cJSON_AddItemToObject(parent, name, o);
+}
+
+static const char *zoom_cal_verdict(const zoom_cal_t *c)
+{
+    if (!c->free_run.captured || !c->wide.captured || !c->tele.captured) {
+        return "Capture free-run, wide, and tele, then Save.";
+    }
+    if (c->span_steps < HOME_ZOOM_CAL_MIN_RANGE) {
+        return "Wide and tele ends are too close together.";
+    }
+    if (c->sg_usable) {
+        return "stallGuard bands separate. Save enables live stall-stop plus soft limits off each rubber end.";
+    }
+    return "stallGuard bands overlap (skip on the rubber ring looks like free-run). Save still sets soft limits so jog stops short of each end. Live stall stays off. PWM rise at the rubber is used for homing and auto-mark.";
+}
+
+static cJSON *zoom_cal_to_json(void)
+{
+    const zoom_cal_t *c = zoom_cal_get();
+    cJSON *j = cJSON_CreateObject();
+    cJSON_AddBoolToObject(j, "valid", c->valid != 0);
+    cJSON_AddBoolToObject(j, "sg_usable", c->sg_usable != 0);
+    cJSON_AddNumberToObject(j, "sg_stall_max", c->sg_stall_max);
+    cJSON_AddBoolToObject(j, "pwm_usable", c->pwm_usable != 0);
+    cJSON_AddNumberToObject(j, "pwm_thresh", c->pwm_thresh);
+    cJSON_AddNumberToObject(j, "wide_pos", (double)c->wide_pos);
+    cJSON_AddNumberToObject(j, "tele_pos", (double)c->tele_pos);
+    cJSON_AddNumberToObject(j, "span_steps", (double)c->span_steps);
+    cJSON_AddNumberToObject(j, "soft_min", (double)c->soft_min);
+    cJSON_AddNumberToObject(j, "soft_max", (double)c->soft_max);
+    cJSON_AddStringToObject(j, "verdict", zoom_cal_verdict(c));
+    json_add_zoom_band(j, "free", &c->free_run);
+    json_add_zoom_band(j, "wide", &c->wide);
+    json_add_zoom_band(j, "tele", &c->tele);
+    if (s_zoom_cal_drive == ZOOM_CAL_WIDE) {
+        cJSON_AddStringToObject(j, "drive_phase", "wide");
+    } else if (s_zoom_cal_drive == ZOOM_CAL_TELE) {
+        cJSON_AddStringToObject(j, "drive_phase", "tele");
+    } else {
+        cJSON_AddStringToObject(j, "drive_phase", "");
+    }
+    cJSON_AddBoolToObject(j, "pwm_hit", stepper_simple_zoom_pwm_hit());
+    return j;
+}
+
+static bool sample_zoom_cal_band(zoom_cal_band_t *band)
+{
+    memset(band, 0, sizeof(*band));
+    band->sg_min = 1023;
+    band->pwm_min = 255;
+
+    unsigned long sg_sum = 0;
+    for (int i = 0; i < HOME_ZOOM_CAL_SAMPLES; i++) {
+        vTaskDelay(pdMS_TO_TICKS(HOME_ZOOM_CAL_INTERVAL_MS));
+        uint16_t sg = 0;
+        uint32_t tstep = 0;
+        uint8_t pwm = 0;
+        if (!tmc_driver_read_sg_tstep_pwm(AXIS_ZOOM, &sg, &tstep, &pwm)) {
+            continue;
+        }
+        band->samples_ok++;
+        if (sg < band->sg_min) {
+            band->sg_min = sg;
+        }
+        if (sg > band->sg_max) {
+            band->sg_max = sg;
+        }
+        sg_sum += sg;
+        if (pwm < band->pwm_min) {
+            band->pwm_min = pwm;
+        }
+        if (pwm > band->pwm_max) {
+            band->pwm_max = pwm;
+        }
+        (void)tstep;
+    }
+
+    stepper_simple_stop_zoom();
+
+    if (band->samples_ok == 0) {
+        band->sg_min = 0;
+        band->pwm_min = 0;
+        return false;
+    }
+    band->sg_avg_x10 = (uint16_t)((sg_sum * 10u) / (unsigned long)band->samples_ok);
+    band->captured = 1;
+    return true;
+}
+
+static esp_err_t api_zoom_cal_get_handler(httpd_req_t *req)
+{
+    cJSON *j = zoom_cal_to_json();
+    cJSON_AddStringToObject(j, "status", "ok");
+    char *s = cJSON_Print(j);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, s, strlen(s));
+    free(s);
+    cJSON_Delete(j);
+    return ESP_OK;
+}
+
+static esp_err_t api_zoom_cal_post_handler(httpd_req_t *req)
+{
+    char content[256];
+    int ret = httpd_req_recv(req, content, sizeof(content) - 1);
+    if (ret <= 0) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    content[ret] = '\0';
+
+    cJSON *json = cJSON_Parse(content);
+    if (json == NULL) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid json");
+        return ESP_FAIL;
+    }
+    cJSON *action_item = cJSON_GetObjectItem(json, "action");
+    const char *action = cJSON_IsString(action_item) ? action_item->valuestring : "";
+
+    if (strcmp(action, "clear") == 0) {
+        cJSON_Delete(json);
+        zoom_cal_clear();
+        stepper_simple_reload_zoom_cal();
+        cJSON *j = zoom_cal_to_json();
+        cJSON_AddStringToObject(j, "status", "ok");
+        char *s = cJSON_Print(j);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, s, strlen(s));
+        free(s);
+        cJSON_Delete(j);
+        return ESP_OK;
+    }
+
+    if (strcmp(action, "save") == 0) {
+        cJSON_Delete(json);
+        char err[96] = "";
+        int32_t origin = zoom_cal_rebase_wide();
+        bool ok = zoom_cal_save(err, (int)sizeof(err));
+        if (ok) {
+            stepper_simple_shift_zoom(origin);
+            stepper_simple_reload_zoom_cal();
+        }
+        cJSON *j = zoom_cal_to_json();
+        cJSON_AddStringToObject(j, "status", ok ? "ok" : "error");
+        if (!ok) {
+            cJSON_AddStringToObject(j, "error", err);
+        }
+        char *s = cJSON_Print(j);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, s, strlen(s));
+        free(s);
+        cJSON_Delete(j);
+        return ESP_OK;
+    }
+
+    if (strcmp(action, "capture") != 0) {
+        cJSON_Delete(json);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "action must be capture, save, or clear");
+        return ESP_FAIL;
+    }
+
+    cJSON *phase_item = cJSON_GetObjectItem(json, "phase");
+    const char *phase_s = cJSON_IsString(phase_item) ? phase_item->valuestring : "";
+    zoom_cal_phase_t phase;
+    if (strcmp(phase_s, "free") == 0) {
+        phase = ZOOM_CAL_FREE;
+    } else if (strcmp(phase_s, "wide") == 0) {
+        phase = ZOOM_CAL_WIDE;
+    } else if (strcmp(phase_s, "tele") == 0) {
+        phase = ZOOM_CAL_TELE;
+    } else {
+        cJSON_Delete(json);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "phase must be free, wide, or tele");
+        return ESP_FAIL;
+    }
+    cJSON_Delete(json);
+
+    if (stepper_simple_is_homing()) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Homing in progress");
+        return ESP_FAIL;
+    }
+    if (!stepper_simple_is_homed()) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "HOME first, then calibrate zoom");
+        return ESP_FAIL;
+    }
+
+    if (phase == ZOOM_CAL_FREE) {
+        zoom_cal_clear_drive_state();
+        float dir = 1.0f;
+        float pan_p = 0.0f, tilt_p = 0.0f, zoom_p = 0.0f;
+        stepper_simple_get_positions(&pan_p, &tilt_p, &zoom_p);
+        (void)pan_p;
+        (void)tilt_p;
+        if (zoom_p > (float)MAX_ZOOM_RANGE_STEPS * 0.5f) {
+            dir = -1.0f;
+        }
+        stepper_simple_nudge_zoom(dir * HOME_ZOOM_CAL_SAMPLE_VEL);
+        vTaskDelay(pdMS_TO_TICKS(100));
+    } else if (s_zoom_cal_drive == (int)phase) {
+        float dir = (phase == ZOOM_CAL_WIDE)
+                        ? (float)HOMING_ZOOM_DIRECTION
+                        : -(float)HOMING_ZOOM_DIRECTION;
+        stepper_simple_nudge_zoom(dir * HOME_ZOOM_CAL_SAMPLE_VEL);
+    } else {
+        float dir = (phase == ZOOM_CAL_WIDE)
+                        ? (float)HOMING_ZOOM_DIRECTION
+                        : -(float)HOMING_ZOOM_DIRECTION;
+        s_zoom_cal_drive = (int)phase;
+        stepper_simple_set_zoom_limit_holdoff(true);
+        stepper_simple_arm_zoom_pwm_stop(zoom_cal_pwm_thresh());
+        stepper_simple_nudge_zoom(dir * HOME_ZOOM_CAL_SAMPLE_VEL);
+        cJSON *moving = zoom_cal_to_json();
+        cJSON_AddStringToObject(moving, "status", "moving");
+        cJSON_AddStringToObject(moving, "hint",
+            (phase == ZOOM_CAL_WIDE)
+                ? "Zooming toward wide. Stops when PWM rises; click again to mark manually."
+                : "Zooming toward tele. Stops when PWM rises; click again to mark manually.");
+        char *s = cJSON_Print(moving);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, s, strlen(s));
+        free(s);
+        cJSON_Delete(moving);
+        return ESP_OK;
+    }
+
+    zoom_cal_band_t band;
+    if (!sample_zoom_cal_band(&band)) {
+        zoom_cal_clear_drive_state();
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "SG sample failed");
+        return ESP_FAIL;
+    }
+
+    float pan_p = 0.0f, tilt_p = 0.0f, zoom_p = 0.0f;
+    stepper_simple_get_positions(&pan_p, &tilt_p, &zoom_p);
+    (void)pan_p;
+    (void)tilt_p;
+    zoom_cal_set_band(phase, &band, (int32_t)zoom_p);
+    zoom_cal_clear_drive_state();
+
+    cJSON *j = zoom_cal_to_json();
+    cJSON_AddStringToObject(j, "status", "ok");
+    cJSON_AddNumberToObject(j, "position", (double)zoom_p);
+    char *s = cJSON_Print(j);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, s, strlen(s));
+    free(s);
+    cJSON_Delete(j);
     return ESP_OK;
 }
 
@@ -966,6 +1313,85 @@ static esp_err_t api_tmc_reconfigure_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+static double irun_amps(uint8_t cs)
+{
+    return (double)(cs + 1) * 0.325 / (32.0 * 0.11 * 1.41421356);
+}
+
+static void json_add_irun(cJSON *json)
+{
+    uint8_t pan = tmc_driver_get_irun(AXIS_PAN);
+    uint8_t tilt = tmc_driver_get_irun(AXIS_TILT);
+    uint8_t zoom = tmc_driver_get_irun(AXIS_ZOOM);
+    cJSON_AddNumberToObject(json, "pan_irun", pan);
+    cJSON_AddNumberToObject(json, "pan_irun_amps", irun_amps(pan));
+    cJSON_AddNumberToObject(json, "tilt_irun", tilt);
+    cJSON_AddNumberToObject(json, "tilt_irun_amps", irun_amps(tilt));
+    cJSON_AddNumberToObject(json, "zoom_irun", zoom);
+    cJSON_AddNumberToObject(json, "zoom_irun_amps", irun_amps(zoom));
+}
+
+static bool apply_irun_item(cJSON *json, const char *key, uint8_t axis, bool *ok)
+{
+    cJSON *item = cJSON_GetObjectItem(json, key);
+    if (item == NULL) {
+        return false;
+    }
+    if (!cJSON_IsNumber(item)) {
+        return false;
+    }
+    if (!tmc_driver_set_irun(axis, (uint8_t)item->valueint)) {
+        *ok = false;
+    }
+    return true;
+}
+
+static esp_err_t api_tmc_irun_handler(httpd_req_t *req)
+{
+    if (req->method == HTTP_GET) {
+        cJSON *json = cJSON_CreateObject();
+        cJSON_AddStringToObject(json, "status", "ok");
+        json_add_irun(json);
+        char *s = cJSON_Print(json);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, s, strlen(s));
+        free(s);
+        cJSON_Delete(json);
+        return ESP_OK;
+    }
+
+    char content[192];
+    int ret = httpd_req_recv(req, content, sizeof(content) - 1);
+    if (ret <= 0) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    content[ret] = '\0';
+    cJSON *json = cJSON_Parse(content);
+    if (json == NULL) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid JSON");
+        return ESP_FAIL;
+    }
+    bool ok = true;
+    bool any = apply_irun_item(json, "pan_irun", AXIS_PAN, &ok);
+    any = apply_irun_item(json, "tilt_irun", AXIS_TILT, &ok) || any;
+    any = apply_irun_item(json, "zoom_irun", AXIS_ZOOM, &ok) || any;
+    cJSON_Delete(json);
+    if (!any) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "pan_irun, tilt_irun, or zoom_irun 3-16 required");
+        return ESP_FAIL;
+    }
+    cJSON *out = cJSON_CreateObject();
+    cJSON_AddStringToObject(out, "status", ok ? "ok" : "error");
+    json_add_irun(out);
+    char *s = cJSON_Print(out);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, s, strlen(s));
+    free(s);
+    cJSON_Delete(out);
+    return ESP_OK;
+}
+
 bool http_server_start(void) {
     // If server is already running, return success
     if (server_handle != NULL) {
@@ -974,7 +1400,7 @@ bool http_server_start(void) {
     }
     
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 16;
+    config.max_uri_handlers = 20;
     
     ESP_LOGI(TAG, "Starting HTTP server on port %d", config.server_port);
     
@@ -1070,6 +1496,34 @@ bool http_server_start(void) {
             .handler = api_tmc_reconfigure_handler,
         };
         httpd_register_uri_handler(server_handle, &tmc_reconfig_uri);
+
+        httpd_uri_t tmc_irun_get_uri = {
+            .uri = "/api/tmc/irun",
+            .method = HTTP_GET,
+            .handler = api_tmc_irun_handler,
+        };
+        httpd_register_uri_handler(server_handle, &tmc_irun_get_uri);
+
+        httpd_uri_t tmc_irun_post_uri = {
+            .uri = "/api/tmc/irun",
+            .method = HTTP_POST,
+            .handler = api_tmc_irun_handler,
+        };
+        httpd_register_uri_handler(server_handle, &tmc_irun_post_uri);
+
+        httpd_uri_t zoom_cal_get_uri = {
+            .uri = "/api/zoom-cal",
+            .method = HTTP_GET,
+            .handler = api_zoom_cal_get_handler,
+        };
+        httpd_register_uri_handler(server_handle, &zoom_cal_get_uri);
+
+        httpd_uri_t zoom_cal_post_uri = {
+            .uri = "/api/zoom-cal",
+            .method = HTTP_POST,
+            .handler = api_zoom_cal_post_handler,
+        };
+        httpd_register_uri_handler(server_handle, &zoom_cal_post_uri);
         
         ESP_LOGI(TAG, "HTTP server started");
         return true;

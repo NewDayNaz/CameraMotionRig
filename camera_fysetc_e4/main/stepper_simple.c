@@ -4,11 +4,13 @@
  *
  * Repeatability rules:
  * - PAN/TILT origin: magnetic sensor leading edge after debounce + pull-off
- * - ZOOM origin: temporary step-count crawl (HOME_ZOOM_DRIVE_STEPS) then zero
- * - Homing miss faults pan/tilt; zoom invents zero after the drive completes
+ * - ZOOM origin: PWM_SCALE_SUM rise at the wide rubber, then pull-off; 0 is the ring
+ * - Homing miss faults pan/tilt; zoom faults if PWM never rises (UART-down falls back to a crawl)
  * - Arrival is counted pulses, never a software snap to target
  * - SAVE/GOTO require homed and (for SAVE) idle
- * - Zoom stallGuard during jog/preset is a crash stop (fault, clear homed)
+ * - Zoom live stallGuard halt is off unless calibration finds a free-run vs
+ *   end-stop SG gap. Soft limits use the calibrated rubber-ring span.
+ * - Jog/preset slow in the last SOFT_LIMIT_APPROACH_STEPS before a software stop
  * - After IDLE_REHOME_MS with no steps: HOME, then return to the pre-home pose
  */
 
@@ -17,6 +19,7 @@
 #include "board.h"
 #include "preset_storage.h"
 #include "tmc_driver.h"
+#include "zoom_cal.h"
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -44,7 +47,10 @@ typedef enum {
     HOME_PHASE_PULLOFF,
     HOME_PHASE_SLOW_SEEK,
     HOME_PHASE_FINAL_PULLOFF,
-    HOME_PHASE_RANGE_DRIVE, /* zoom: drive N steps, then settle as origin */
+    HOME_PHASE_RANGE_DRIVE, /* zoom UART-down fallback: drive N steps */
+    HOME_PHASE_ZOOM_PROBE,  /* PWM high: peek toward tele to leave an end */
+    HOME_PHASE_ZOOM_SEEK,   /* toward wide until PWM_SCALE_SUM rises */
+    HOME_PHASE_ZOOM_PULLOFF,
     HOME_PHASE_SETTLE,
 } home_phase_t;
 
@@ -93,6 +99,19 @@ static preset_axis_phase_t preset_phase[NUM_AXES];
 
 static char last_error[96] = "";
 
+static bool zoom_cal_limits = false;
+static bool zoom_limit_holdoff = false;
+static bool zoom_sg_live = false;
+static uint16_t zoom_sg_stall_max = HOME_ZOOM_SG_STALL_MAX;
+static int32_t zoom_soft_min_s = 0;
+static int32_t zoom_soft_max_s = MAX_ZOOM_RANGE_STEPS;
+static bool zoom_origin_from_pwm = false;
+static bool zoom_pwm_stop_en = false;
+static uint8_t zoom_pwm_stop_thresh = HOME_ZOOM_PWM_THRESH;
+static uint8_t zoom_pwm_stop_hits = 0;
+static bool zoom_pwm_stop_hit = false;
+static int32_t zoom_seek_ignore = HOME_ZOOM_PWM_IGNORE_STEPS;
+
 #define MIN_STEP_DELAY_US 250
 #define UPDATE_DT_S 0.001f
 #define SLEW_ACCEL 2000.0f
@@ -113,7 +132,7 @@ static float get_homing_velocity(uint8_t axis, bool slow)
     if (axis == AXIS_TILT) {
         return slow ? HOMING_TILT_SLOW_VELOCITY : HOMING_TILT_VELOCITY;
     }
-    return slow ? HOMING_ZOOM_SLOW_VELOCITY : HOMING_ZOOM_VELOCITY;
+    return HOME_ZOOM_CAL_SAMPLE_VEL;
 }
 
 static int get_homing_direction(uint8_t axis)
@@ -151,12 +170,40 @@ static int32_t get_max_range(uint8_t axis)
 
 static int32_t axis_soft_min(uint8_t axis)
 {
+    if (axis == AXIS_ZOOM && zoom_cal_limits) {
+        return zoom_soft_min_s;
+    }
     return (get_travel_sign(axis) > 0) ? 0 : -get_max_range(axis);
 }
 
 static int32_t axis_soft_max(uint8_t axis)
 {
+    if (axis == AXIS_ZOOM && zoom_cal_limits) {
+        return zoom_soft_max_s;
+    }
     return (get_travel_sign(axis) > 0) ? get_max_range(axis) : 0;
+}
+
+static void reset_zoom_live_stall(void);
+static bool zoom_pwm_cached(uint8_t *pwm);
+
+static void apply_zoom_cal_locked(void)
+{
+    const zoom_cal_t *cal = zoom_cal_get();
+    if (cal != NULL && cal->valid && cal->span_steps >= HOME_ZOOM_CAL_MIN_RANGE) {
+        zoom_cal_limits = true;
+        zoom_soft_min_s = cal->soft_min;
+        zoom_soft_max_s = cal->soft_max;
+        zoom_sg_live = cal->sg_usable != 0;
+        zoom_sg_stall_max = cal->sg_stall_max != 0 ? cal->sg_stall_max : HOME_ZOOM_SG_STALL_MAX;
+    } else {
+        zoom_cal_limits = false;
+        zoom_sg_live = false;
+        zoom_sg_stall_max = HOME_ZOOM_SG_STALL_MAX;
+        zoom_soft_min_s = 0;
+        zoom_soft_max_s = MAX_ZOOM_RANGE_STEPS;
+    }
+    reset_zoom_live_stall();
 }
 
 static int32_t clamp_axis_pos(uint8_t axis, int32_t pos)
@@ -293,12 +340,51 @@ static void reset_zoom_live_stall(void)
     zoom_live_dir = 0;
 }
 
+static void reset_zoom_pwm_stop(void)
+{
+    zoom_pwm_stop_hits = 0;
+    zoom_pwm_stop_hit = false;
+}
+
+static void check_zoom_pwm_stop(void)
+{
+    if (!zoom_pwm_stop_en || zoom_pwm_stop_hit || homing_active) {
+        return;
+    }
+    if (!zoom_limit_holdoff) {
+        return;
+    }
+    if (fabsf(axes[AXIS_ZOOM].velocity) < 0.1f) {
+        return;
+    }
+    if (zoom_live_steps < HOME_ZOOM_PWM_IGNORE_STEPS) {
+        return;
+    }
+    uint8_t pwm = 0;
+    if (!zoom_pwm_cached(&pwm)) {
+        return;
+    }
+    if (pwm >= zoom_pwm_stop_thresh) {
+        zoom_pwm_stop_hits++;
+        if (zoom_pwm_stop_hits >= HOME_ZOOM_PWM_HITS) {
+            zoom_pwm_stop_hit = true;
+            ESP_LOGI(TAG, "ZOOM cal PWM trip PWM=%u thresh=%u",
+                     (unsigned)pwm, (unsigned)zoom_pwm_stop_thresh);
+        }
+    } else {
+        zoom_pwm_stop_hits = 0;
+    }
+}
+
 static void stop_locked(bool aborting_home)
 {
     halt_all_axes();
     homing_active = false;
     home_phase = HOME_PHASE_IDLE;
     reset_zoom_live_stall();
+    zoom_limit_holdoff = false;
+    zoom_pwm_stop_en = false;
+    reset_zoom_pwm_stop();
     if (aborting_home) {
         homed = false;
         startup_homing = false;
@@ -425,7 +511,9 @@ static void finish_axis_home_success(void)
 {
     uint8_t axis = homing_axis;
     halt_axis(axis);
-    axes[axis].position = 0;
+    if (!(axis == AXIS_ZOOM && zoom_origin_from_pwm)) {
+        axes[axis].position = 0;
+    }
     axis_fault[axis] = false;
     crash_debounce[axis] = 0;
     ESP_LOGI(TAG, "Homing axis %s complete — origin set after pull-off", axis_names[axis]);
@@ -435,6 +523,7 @@ static void finish_axis_home_success(void)
         homing_active = false;
         home_phase = HOME_PHASE_IDLE;
         homed = true;
+        apply_zoom_cal_locked();
         ESP_LOGI(TAG, "Homing complete — all axes trusted");
         return;
     }
@@ -514,9 +603,16 @@ static void start_homing_axis(uint8_t axis)
     halt_axis(axis);
 
     if (!axis_has_endstop(axis)) {
-        ESP_LOGI(TAG, "Homing %s by step count (%ld steps)",
-                 axis_names[axis], (long)HOME_ZOOM_DRIVE_STEPS);
-        begin_home_phase(HOME_PHASE_RANGE_DRIVE, true, false);
+        zoom_origin_from_pwm = false;
+        if (!tmc_driver_uart_installed()) {
+            ESP_LOGW(TAG, "Homing %s by step count (%ld steps) — UART down",
+                     axis_names[axis], (long)HOME_ZOOM_DRIVE_STEPS);
+            begin_home_phase(HOME_PHASE_RANGE_DRIVE, true, false);
+            return;
+        }
+        ESP_LOGI(TAG, "Homing ZOOM by PWM_SCALE_SUM (thresh=%u)",
+                 (unsigned)zoom_cal_pwm_thresh());
+        begin_home_phase(HOME_PHASE_ZOOM_PROBE, false, false);
         return;
     }
 
@@ -538,19 +634,102 @@ static bool extra_travel_done(int32_t extra_steps)
     return (home_phase_steps - home_extra_start_steps) >= extra_steps;
 }
 
+static bool zoom_pwm_cached(uint8_t *pwm)
+{
+    uint16_t sg = 0;
+    uint32_t ts = 0;
+    uint8_t p = 0;
+    if (!tmc_driver_get_cached_sg_tstep_pwm(&sg, &ts, &p)) {
+        return false;
+    }
+    if (pwm != NULL) {
+        *pwm = p;
+    }
+    return true;
+}
+
+static int32_t zoom_home_max_seek(void)
+{
+    const zoom_cal_t *cal = zoom_cal_get();
+    if (cal != NULL && cal->valid && cal->span_steps >= HOME_ZOOM_CAL_MIN_RANGE) {
+        return cal->span_steps + HOME_ZOOM_CAL_MARGIN + HOME_ZOOM_PWM_PROBE_STEPS + 80;
+    }
+    return HOME_ZOOM_PWM_MAX_STEPS;
+}
+
 static void update_zoom_home(uint8_t axis, int32_t range)
 {
     (void)range;
-    if (home_phase != HOME_PHASE_RANGE_DRIVE) {
+    uint8_t pwm = 0;
+    bool pwm_ok = zoom_pwm_cached(&pwm);
+    uint8_t thresh = zoom_cal_pwm_thresh();
+
+    if (home_phase == HOME_PHASE_RANGE_DRIVE) {
+        if (home_phase_steps >= HOME_ZOOM_DRIVE_STEPS) {
+            halt_axis(axis);
+            ESP_LOGW(TAG,
+                     "ZOOM: drove %ld steps — assuming current position as home",
+                     (long)home_phase_steps);
+            begin_home_phase(HOME_PHASE_SETTLE, false, true);
+        }
         return;
     }
-    /* Temporary: drive a fixed count toward wide, then declare origin. */
-    if (home_phase_steps >= HOME_ZOOM_DRIVE_STEPS) {
-        halt_axis(axis);
-        ESP_LOGW(TAG,
-                 "ZOOM: drove %ld steps — assuming current position as home",
-                 (long)home_phase_steps);
-        begin_home_phase(HOME_PHASE_SETTLE, false, true);
+
+    if (home_phase == HOME_PHASE_ZOOM_PROBE) {
+        if (pwm_ok && pwm < thresh) {
+            home_debounce++;
+            if (home_debounce >= HOME_ZOOM_PWM_HITS || home_phase_steps == 0) {
+                zoom_seek_ignore = (home_phase_steps < 3)
+                                       ? HOME_ZOOM_PWM_IGNORE_STEPS
+                                       : 8;
+                begin_home_phase(HOME_PHASE_ZOOM_SEEK, true, false);
+            }
+            return;
+        }
+        home_debounce = 0;
+        if (home_phase_steps >= HOME_ZOOM_PWM_PROBE_STEPS) {
+            ESP_LOGI(TAG, "ZOOM PWM still high after probe — seeking wide");
+            zoom_seek_ignore = 8;
+            begin_home_phase(HOME_PHASE_ZOOM_SEEK, true, false);
+        }
+        return;
+    }
+
+    if (home_phase == HOME_PHASE_ZOOM_SEEK) {
+        if (home_phase_steps >= zoom_home_max_seek()) {
+            fail_current_home("zoom PWM wide end not seen");
+            return;
+        }
+        if (home_phase_steps < zoom_seek_ignore) {
+            home_debounce = 0;
+            return;
+        }
+        if (!pwm_ok) {
+            return;
+        }
+        if (pwm >= thresh) {
+            home_debounce++;
+            if (home_debounce >= HOME_ZOOM_PWM_HITS) {
+                halt_axis(axis);
+                axes[axis].position = 0;
+                zoom_origin_from_pwm = true;
+                ESP_LOGI(TAG, "ZOOM PWM home contact PWM=%u thresh=%u after %ld steps — pull-off %d",
+                         (unsigned)pwm, (unsigned)thresh, (long)home_phase_steps,
+                         HOME_ZOOM_CAL_MARGIN);
+                begin_home_phase(HOME_PHASE_ZOOM_PULLOFF, false, false);
+            }
+        } else {
+            home_debounce = 0;
+        }
+        return;
+    }
+
+    if (home_phase == HOME_PHASE_ZOOM_PULLOFF) {
+        if (home_phase_steps >= HOME_ZOOM_CAL_MARGIN) {
+            halt_axis(axis);
+            begin_home_phase(HOME_PHASE_SETTLE, false, true);
+        }
+        return;
     }
 }
 
@@ -668,14 +847,38 @@ static void apply_soft_limits(uint8_t axis)
     if (!homed || homing_active) {
         return;
     }
-    int32_t pos = axes[axis].position;
-    if (pos <= axis_soft_min(axis) && axes[axis].target_velocity < 0.0f) {
-        axes[axis].target_velocity = 0.0f;
-        axes[axis].velocity = 0.0f;
+    if (axis == AXIS_ZOOM && zoom_limit_holdoff) {
+        return;
     }
-    if (pos >= axis_soft_max(axis) && axes[axis].target_velocity > 0.0f) {
-        axes[axis].target_velocity = 0.0f;
-        axes[axis].velocity = 0.0f;
+    int32_t mn = axis_soft_min(axis);
+    int32_t mx = axis_soft_max(axis);
+    int32_t pos = axes[axis].position;
+    float tv = axes[axis].target_velocity;
+    int32_t remain;
+    if (tv < -0.1f) {
+        remain = pos - mn;
+        if (remain <= 0) {
+            axes[axis].target_velocity = 0.0f;
+            axes[axis].velocity = 0.0f;
+            return;
+        }
+    } else if (tv > 0.1f) {
+        remain = mx - pos;
+        if (remain <= 0) {
+            axes[axis].target_velocity = 0.0f;
+            axes[axis].velocity = 0.0f;
+            return;
+        }
+    } else {
+        return;
+    }
+    if (remain < SOFT_LIMIT_APPROACH_STEPS) {
+        float mag = fabsf(tv) * ((float)remain / (float)SOFT_LIMIT_APPROACH_STEPS);
+        float floor_v = (axis == AXIS_ZOOM) ? MIN_ZOOM_VELOCITY : MIN_PAN_TILT_VELOCITY;
+        if (mag < floor_v) {
+            mag = floor_v;
+        }
+        axes[axis].target_velocity = (tv > 0.0f) ? mag : -mag;
     }
 }
 
@@ -706,6 +909,9 @@ static void check_endstop_crashes(void)
 
 static void check_zoom_live_stall(void)
 {
+    if (!zoom_sg_live) {
+        return;
+    }
     if (homing_active) {
         reset_zoom_live_stall();
         return;
@@ -740,14 +946,14 @@ static void check_zoom_live_stall(void)
 
     uint16_t sg = 0;
     uint32_t tstep = 0;
-    if (!tmc_driver_read_sg_tstep(AXIS_ZOOM, &sg, &tstep)) {
+    if (!tmc_driver_get_cached_sg_tstep(&sg, &tstep)) {
         return;
     }
     if (tstep > HOME_ZOOM_LIVE_TSTEP_MAX) {
         zoom_live_sg_hits = 0;
         return;
     }
-    if (sg > HOME_ZOOM_SG_STALL_MAX) {
+    if (sg > zoom_sg_stall_max) {
         zoom_live_sg_hits = 0;
         return;
     }
@@ -869,7 +1075,10 @@ static void generate_steps(int64_t now_us)
         } else {
             axes[i].position--;
         }
-        axes[i].last_step_time = now_us;
+        axes[i].last_step_time += (int64_t)axes[i].step_delay_us;
+        if ((now_us - axes[i].last_step_time) > (int64_t)axes[i].step_delay_us * 4) {
+            axes[i].last_step_time = now_us;
+        }
 
         if (motors_standby) {
             tmc_driver_set_standby(false);
@@ -1036,6 +1245,7 @@ void stepper_simple_init(void)
     idle_rehome_restore = false;
     reset_zoom_live_stall();
     set_error("Not homed");
+    apply_zoom_cal_locked();
 
     ESP_LOGI(TAG, "Stepper control initialized (origin untrusted until HOME)");
 }
@@ -1073,6 +1283,7 @@ void stepper_simple_update(void)
     check_endstop_crashes();
     generate_steps(now_us);
     check_zoom_live_stall();
+    check_zoom_pwm_stop();
 
     if (!homing_active && !preset_move_active && !any_velocity_nonzero()) {
         if (!motors_standby && last_motion_us > 0 &&
@@ -1158,6 +1369,105 @@ void stepper_simple_get_positions(float *pan, float *tilt, float *zoom)
     MOTION_UNLOCK();
 }
 
+void stepper_simple_get_velocities(float *pan, float *tilt, float *zoom)
+{
+    if (pan == NULL || tilt == NULL || zoom == NULL) {
+        return;
+    }
+    if (!initialized) {
+        *pan = *tilt = *zoom = 0.0f;
+        return;
+    }
+    MOTION_LOCK();
+    *pan = axes[AXIS_PAN].target_velocity;
+    *tilt = axes[AXIS_TILT].target_velocity;
+    *zoom = axes[AXIS_ZOOM].target_velocity;
+    MOTION_UNLOCK();
+}
+
+void stepper_simple_stop_zoom(void)
+{
+    if (!initialized) {
+        return;
+    }
+    MOTION_LOCK();
+    axes[AXIS_ZOOM].target_velocity = 0.0f;
+    axes[AXIS_ZOOM].velocity = 0.0f;
+    axes[AXIS_ZOOM].move_direction = 0;
+    reset_zoom_live_stall();
+    MOTION_UNLOCK();
+}
+
+void stepper_simple_nudge_zoom(float vel)
+{
+    if (!initialized) {
+        return;
+    }
+    MOTION_LOCK();
+    if (!homing_active) {
+        axes[AXIS_ZOOM].target_velocity = vel;
+    }
+    MOTION_UNLOCK();
+}
+
+void stepper_simple_set_zoom_limit_holdoff(bool holdoff)
+{
+    if (!initialized) {
+        return;
+    }
+    MOTION_LOCK();
+    zoom_limit_holdoff = holdoff;
+    if (!holdoff) {
+        zoom_pwm_stop_en = false;
+        reset_zoom_pwm_stop();
+    }
+    MOTION_UNLOCK();
+}
+
+void stepper_simple_arm_zoom_pwm_stop(uint8_t thresh)
+{
+    if (!initialized) {
+        return;
+    }
+    MOTION_LOCK();
+    zoom_pwm_stop_thresh = (thresh >= 40u && thresh <= 200u) ? thresh : HOME_ZOOM_PWM_THRESH;
+    zoom_pwm_stop_en = true;
+    reset_zoom_pwm_stop();
+    reset_zoom_live_stall();
+    MOTION_UNLOCK();
+}
+
+bool stepper_simple_zoom_pwm_hit(void)
+{
+    if (!initialized) {
+        return false;
+    }
+    MOTION_LOCK();
+    bool hit = zoom_pwm_stop_hit;
+    MOTION_UNLOCK();
+    return hit;
+}
+
+void stepper_simple_shift_zoom(int32_t subtract)
+{
+    if (!initialized || subtract == 0) {
+        return;
+    }
+    MOTION_LOCK();
+    axes[AXIS_ZOOM].position -= subtract;
+    MOTION_UNLOCK();
+}
+
+void stepper_simple_reload_zoom_cal(void)
+{
+    if (!initialized) {
+        return;
+    }
+    MOTION_LOCK();
+    apply_zoom_cal_locked();
+    MOTION_UNLOCK();
+}
+
 void stepper_simple_get_status(motion_status_t *status)
 {
     if (status == NULL) {
@@ -1171,6 +1481,7 @@ void stepper_simple_get_status(motion_status_t *status)
     MOTION_LOCK();
     for (int i = 0; i < NUM_AXES; i++) {
         status->position[i] = axes[i].position;
+        status->velocity[i] = axes[i].target_velocity;
         status->axis_fault[i] = axis_fault[i];
         status->endstop[i] = endstop_raw((uint8_t)i);
     }
@@ -1178,6 +1489,11 @@ void stepper_simple_get_status(motion_status_t *status)
     status->homing = homing_active;
     status->moving = is_moving_locked();
     status->idle_rehome_s = idle_rehome_remaining_s(esp_timer_get_time());
+    status->zoom_soft_min = axis_soft_min(AXIS_ZOOM);
+    status->zoom_soft_max = axis_soft_max(AXIS_ZOOM);
+    status->zoom_cal_valid = zoom_cal_limits;
+    status->zoom_sg_live = zoom_sg_live;
+    status->zoom_sg_stall_max = zoom_sg_stall_max;
     MOTION_UNLOCK();
 }
 

@@ -8,9 +8,9 @@
  * leading edge of the magnet field (sensor not held). Homing direction is +
  * so useful travel is negative.
  *
- * ZOOM: no endstop. Temporary step-count home: drive HOMING_ZOOM_DIRECTION for
- * HOME_ZOOM_DRIVE_STEPS, then declare origin. Homing direction is − so useful
- * travel is positive.
+ * ZOOM: no endstop. PWM_SCALE_SUM home: seek HOMING_ZOOM_DIRECTION (wide)
+ * until stealthChop effort rises, pull off HOME_ZOOM_CAL_MARGIN, leave 0 at
+ * the rubber. Homing direction is − so useful travel is positive.
  *
  * Calibrate MAX_*_RANGE_STEPS by homing, jogging to the far stop, and reading
  * STATUS. Pan/tilt homing faults if the sensor is not seen within this range.
@@ -22,7 +22,7 @@
 #define MIN_PAN_TILT_VELOCITY 20.0f
 #define MIN_ZOOM_VELOCITY 10.0f
 
-#define MAX_PAN_VELOCITY 1000.0f
+#define MAX_PAN_VELOCITY 850.0f
 #define MAX_TILT_VELOCITY 1200.0f  /* a bit faster than pan — tilt gearing feels slower */
 #define MAX_ZOOM_VELOCITY 145.0f
 
@@ -33,11 +33,11 @@
 /* Pan/tilt jog scales with zoom: wide = 1.0, full telephoto = ZOOM_PT_SCALE_MIN. */
 #define ZOOM_PT_SCALE_MIN  0.5f
 
-#define HOMING_PAN_VELOCITY  200.0f
+#define HOMING_PAN_VELOCITY  170.0f
 #define HOMING_TILT_VELOCITY 300.0f
 #define HOMING_ZOOM_VELOCITY 50.0f
 
-#define HOMING_PAN_SLOW_VELOCITY  40.0f
+#define HOMING_PAN_SLOW_VELOCITY  34.0f
 #define HOMING_TILT_SLOW_VELOCITY 60.0f
 #define HOMING_ZOOM_SLOW_VELOCITY 25.0f
 
@@ -64,20 +64,38 @@
 #define HOME_SETTLE_MS               50
 #define DIR_SETUP_DELAY_US           20
 
-/* Zoom: temporary step-count home (stallGuard disabled). Drive this many
- * steps toward wide, then set origin. Keep short so we don't grind the stop;
- * ~20 s at HOMING_ZOOM_VELOCITY. Soft travel limit stays MAX_ZOOM_RANGE_STEPS. */
+/* Zoom UART-down fallback only. PWM homing is the normal path. */
 #define HOME_ZOOM_DRIVE_STEPS         1000
+/* Default PWM_SCALE_SUM trip until calibration measures free vs ends
+ * (free ~76-78, rubber ~84-86 at HOME_ZOOM_CAL_SAMPLE_VEL). */
+#define HOME_ZOOM_PWM_THRESH          81
+#define HOME_ZOOM_CAL_PWM_GAP          4    /* free max + gap → auto-mark / home */
+#define HOME_ZOOM_PWM_PROBE_STEPS     12    /* if already on an end, peek toward tele */
+#define HOME_ZOOM_PWM_IGNORE_STEPS    40
+#define HOME_ZOOM_PWM_HITS             3
+#define HOME_ZOOM_PWM_MAX_STEPS       1200  /* first home without a saved span */
+#define SOFT_LIMIT_APPROACH_STEPS     40    /* scale jog/preset speed into a soft stop */
 
-/* Live zoom stall-stop (jog / preset). Same SG threshold as former homing.
- * Ignore a short run-up and direction changes so startup/backlash does not
- * look like a lens hit. TSTEP at 0xFFFFF means the TMC is not stepping. */
+/* Live zoom stall-stop is off unless zoom calibration finds a real SG gap.
+ * UART for SG is cached off the 1 ms step task (TSTEP 3400→8600 if blocked). */
 #define HOME_ZOOM_SG_POLL_MS          25
 #define HOME_ZOOM_SG_HITS              3
-#define HOME_ZOOM_SG_STALL_MAX        20   /* 0–1023; lower = only a hard stall */
+#define HOME_ZOOM_SG_STALL_MAX        20   /* fallback; calib overwrites if usable */
 #define HOME_ZOOM_LIVE_IGNORE_STEPS   40
-#define HOME_ZOOM_LIVE_SG_MIN_VEL     25.0f
-#define HOME_ZOOM_LIVE_TSTEP_MAX      0x000FFFFEu
+#define HOME_ZOOM_LIVE_SG_MIN_VEL     100.0f
+/* TSTEP is time between incoming 1/256 STEP edges, not rotor speed.
+ * ~3400 at 120 step/s, ~7500 at 50 step/s (8 µstep). */
+#define HOME_ZOOM_LIVE_TSTEP_MAX      4000u
+
+/* User-paced zoom calibration (free-run + each rubber-ring end). */
+#define HOME_ZOOM_CAL_SAMPLES         8
+#define HOME_ZOOM_CAL_INTERVAL_MS     40
+#define HOME_ZOOM_CAL_MARGIN          32    /* keep jog this many steps off each end */
+#define HOME_ZOOM_CAL_MIN_RANGE       200
+#define HOME_ZOOM_CAL_SG_GAP          20    /* free min must beat end max by this */
+/* Same speed for free-run and end samples. PWM_SCALE rises at low speed even
+ * in air, so mixed speeds (100 vs 40) looked like a load gap last time. */
+#define HOME_ZOOM_CAL_SAMPLE_VEL      80.0f
 
 /* Overnight origin refresh. After this idle time, HOME then return to pose.
  * 6 h is longer than a service hold, short enough for days-on drift. */
@@ -91,15 +109,17 @@
 
 /*
  * TMC2209 CS values 0–31. FYSETC E4 Rsense is ~0.11 Ω, vsense=0 (Vfs=0.325 V):
- * I_rms ≈ (CS+1)/32 * 0.325 / (0.11 * 1.414) → CS 16 ≈ 1.1 A, CS 11 ≈ 0.78 A, CS 8 ≈ 0.59 A, CS 4 ≈ 0.33 A.
+ * I_rms ≈ (CS+1)/32 * 0.325 / (0.11 * 1.414) → CS 16 ≈ 1.1 A, CS 11 ≈ 0.78 A.
  * Old IHOLD=8 at standstill for days is why the motors cooked.
- * Tilt keeps a little hold against gravity; zoom needs none at rest.
- * Pan/tilt IRUN targets ~0.8 A (CS 11). Zoom stays lower — the lens ring does not need ~1 A.
- * After MOTOR_STANDBY_MS with no steps, currents drop again (STANDBY_*).
+ * Tilt keeps a little hold against gravity; zoom IHOLD=0 at rest.
+ * Default pan/tilt IRUN is CS 11 (~0.78 A). Zoom defaults to CS 5 (~0.39 A)
+ * so the pinion is more likely to stall at the rubber ring than skip over it.
+ * CS 16 pegged PWM_SCALE_SUM (~230/255). Live pan/tilt/zoom IRUN can be
+ * changed from the web UI without flashing. Hold still drops after MOTOR_STANDBY_MS.
  */
 #define TMC_IRUN_PAN           11
 #define TMC_IRUN_TILT          11
-#define TMC_IRUN_ZOOM           8
+#define TMC_IRUN_ZOOM           5
 #define TMC_IHOLD_PAN           3
 #define TMC_IHOLD_TILT          4
 #define TMC_IHOLD_ZOOM          0

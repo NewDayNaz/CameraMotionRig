@@ -16,6 +16,7 @@
 #include "stepper_simple.h"
 #include "stepper_limits.h"
 #include "preset_storage.h"
+#include "zoom_cal.h"
 #include "usb_serial.h"
 #include "wifi_manager.h"
 #include "http_server.h"
@@ -140,6 +141,7 @@ void app_main(void) {
     ESP_LOGI(TAG, "FYSETC E4 PTZ Camera Rig Firmware Starting");
 
     preset_storage_init();
+    zoom_cal_init();
     board_init();
     usb_serial_init();
 

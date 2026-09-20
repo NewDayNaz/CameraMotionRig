@@ -18,6 +18,7 @@ idf_component_register(
         "usb_serial.c"
         "wifi_manager.c"
         "http_server.c"
+        "zoom_cal.c"
     INCLUDE_DIRS 
         "."
         "${CMAKE_CURRENT_BINARY_DIR}"

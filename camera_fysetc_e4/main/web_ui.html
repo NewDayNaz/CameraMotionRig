@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html><head>
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PTZ Camera Control</title>
 <style>
@@ -59,18 +60,31 @@ button { padding: 10px 20px; margin: 5px; font-size: 16px; cursor: pointer; bord
 #sg_fill { height: 100%; width: 0%; background: #2196F3; }
 #sg_thresh { position: absolute; top: 0; bottom: 0; width: 2px; background: #c62828; }
 #sg_live { font-family: monospace; margin-top: 8px; }
+#zoom_cal_log, #motor_cal_log { font-family: monospace; font-size: 13px; white-space: pre-wrap; background: #eef5ee; padding: 10px; border-radius: 5px; min-height: 4em; }
+.modal-content.wide { max-width: 720px; }
+.setup-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cal-step { margin: 10px 0; padding: 10px; background: #fff; border-radius: 5px; border: 1px solid #e0e0e0; }
+.irun-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0; }
+.setup-banner { background: #fff3e0; color: #e65100; padding: 10px; border-radius: 5px; margin: 10px 0; }
+.wiz-step { display: none; }
+.wiz-step.active { display: block; }
+.wiz-nav { margin-top: 16px; }
 </style>
 </head><body>
 <div class="container">
 <h1>PTZ Camera Control</h1>
 <div class="section">
-<h2>Position Status</h2>
+<h2>Status</h2>
 <div id="positions" class="status status-info">Loading...</div>
 <div id="motion_state" class="status status-info">Motion: Loading...</div>
 <div id="endstops" class="status status-info">Endstops: Loading...</div>
 </div>
 <div class="section">
-<h2>Joystick Control</h2>
+<h2>Drive</h2>
+<div style="margin-bottom: 10px;">
+<button class="btn-primary" onclick="sendCommand('home')">Home All Axes</button>
+<button class="btn-danger" onclick="sendCommand('stop')">Stop</button>
+</div>
 <div class="joystick-container">
 <div class="joystick-wrapper">
 <div class="joystick-label">PAN & TILT</div>
@@ -85,7 +99,15 @@ button { padding: 10px 20px; margin: 5px; font-size: 16px; cursor: pointer; bord
 </div>
 </div>
 <div class="section">
-<h2>Velocity Control (Sliders)</h2>
+<h2>Presets</h2>
+<div class="preset-grid" id="preset_grid"></div>
+<div style="margin-top: 10px;">
+<button class="btn-warning" onclick="savePreset()">Save Current Position</button>
+<input type="number" id="preset_save_idx" min="1" max="15" value="1" style="width: 60px; padding: 5px; margin-left: 10px;">
+</div>
+</div>
+<div class="section">
+<h2>Velocity sliders</h2>
 <div class="control-group">
 <label>PAN: <span id="pan_val">0.0</span> steps/s</label>
 %SLIDER_PAN%
@@ -100,23 +122,149 @@ button { padding: 10px 20px; margin: 5px; font-size: 16px; cursor: pointer; bord
 </div>
 </div>
 <div class="section">
-<h2>Commands</h2>
-<button class="btn-primary" onclick="sendCommand('home')">Home All Axes</button>
-<button class="btn-danger" onclick="sendCommand('stop')">Stop</button>
+<h2>Setup</h2>
+<div class="setup-actions">
+<button class="btn-primary" onclick="openSetupWizard()">First-run setup</button>
+<button class="btn-secondary" onclick="openZoomCalWizard()">Zoom calibration</button>
+<button class="btn-secondary" onclick="openMotorCalWizard()">Motor calibration</button>
+<button class="btn-secondary" onclick="openTmcWizard()">Motor debug (TMC)</button>
 </div>
-<div class="section">
-<h2>TMC UART / stallGuard test</h2>
+<div id="setup_banner" class="setup-banner" style="display:none;">
+Zoom is not calibrated. Run <b>First-run setup</b> (HOME -&gt; currents -&gt; zoom ends -&gt; save) so presets survive a reboot.
+</div>
+<p style="color:#666; font-size:14px; margin: 12px 0 6px;">Firmware update</p>
+<input type="file" id="firmware_file" accept=".bin" style="margin: 6px 0; padding: 5px; width: 100%; max-width: 400px; border: 1px solid #ddd; border-radius: 4px;">
+<button class="btn-warning" onclick="uploadFirmware()">Upload Firmware</button>
+<div id="ota_status" style="margin-top: 10px; padding: 10px; border-radius: 5px; display: none;"></div>
+</div>
+<div id="zoom_cal_modal" class="modal">
+<div class="modal-content wide">
+<div class="modal-header">
+<h2>Zoom calibration</h2>
+<span class="close" onclick="closeZoomCalWizard()">&times;</span>
+</div>
 <p style="color:#666; font-size:14px;">
-Probe checks UART1 (GPIO22/21): IC version 0x21 = TMC2209, <b>write_ack</b> means IFCNT incremented so the driver actually heard a write.
-All-zero registers mean read-back failed (current is still the hardware VREF default). After UART is up, zoom should report IRUN=8 IHOLD=0.
-Live SG: jog ZOOM (or use the spin test) — SG_RESULT should be high while moving freely and drop near 0 at the lens stop. TSTEP at max means the motor is stopped and SG will not change.
-Hold current is now low at rest (zoom IHOLD=0); motors should not cook after days on. If tilt droops, raise TMC_IHOLD_TILT.
-Jog/preset zoom is stall-stopped if the lens hits a hard stop (same SG threshold as homing). After 6 hours idle the rig re-homes and returns to the pose it was holding.
+HOME first. Capture free-run, then wide and tele. Each end button starts moving and marks when PWM rises at the rubber; click again to mark by ear if it does not stop. Save stores the span. Soft limits keep later jogs 32 steps off each end. PWM home uses the same trip after a reboot.
+</p>
+<div class="cal-step">
+<b>1. Free-run</b> - the button moves zoom in mid-range, samples, then stops.<br>
+<button class="btn-secondary" id="btn_cal_free" onclick="zoomCalCapture('free')">Capture free-run</button>
+</div>
+<div class="cal-step">
+<b>2. Wide (zoom out)</b> - starts toward wide and marks when PWM rises. Click again to mark by ear.<br>
+<button class="btn-secondary" id="btn_cal_wide" data-cal="wide" onclick="zoomCalCapture('wide')">Capture wide end</button>
+</div>
+<div class="cal-step">
+<b>3. Tele (zoom in)</b> - starts toward tele and marks when PWM rises. Click again to mark by ear.<br>
+<button class="btn-secondary" id="btn_cal_tele" data-cal="tele" onclick="zoomCalCapture('tele')">Capture tele end</button>
+</div>
+<div>
+<button class="btn-primary" onclick="zoomCalSave()">Save calibration</button>
+<button class="btn-danger" onclick="zoomCalClear()">Clear</button>
+<button class="btn-secondary" onclick="closeZoomCalWizard()">Close</button>
+</div>
+<div id="zoom_cal_log" class="zoom-cal-log">Loading calibration...</div>
+</div>
+</div>
+<div id="setup_wizard_modal" class="modal">
+<div class="modal-content wide">
+<div class="modal-header">
+<h2>First-run setup</h2>
+<span class="close" onclick="closeSetupWizard()">&times;</span>
+</div>
+<p id="setup_wiz_step_label" style="color:#666; font-size:14px;">Step 1 of 4</p>
+<div id="wiz_step_1" class="wiz-step active">
+<p>Home pan and tilt on the magnets, then home zoom on PWM at the wide rubber. After a reboot this is how presets stay in frame.</p>
+<button class="btn-primary" onclick="setupWizardHome()">Home all axes</button>
+<div id="setup_home_log" class="status status-info" style="margin-top:10px;">Waiting to home.</div>
+</div>
+<div id="wiz_step_2" class="wiz-step">
+<p>Set run current. Defaults: pan/tilt 11 (~0.78 A), zoom 5 (~0.39 A). Lower zoom if the ring clicks; raise it if mid-range stalls.</p>
+<div class="irun-row">
+<label>PAN IRUN CS <input type="number" id="wiz_pan_irun" min="3" max="16" step="1" value="11" style="width:64px;"></label>
+<button class="btn-secondary" onclick="applyIrun('pan','wiz_')">Apply pan</button>
+<span id="wiz_pan_irun_amps" style="color:#666;"></span>
+</div>
+<div class="irun-row">
+<label>TILT IRUN CS <input type="number" id="wiz_tilt_irun" min="3" max="16" step="1" value="11" style="width:64px;"></label>
+<button class="btn-secondary" onclick="applyIrun('tilt','wiz_')">Apply tilt</button>
+<span id="wiz_tilt_irun_amps" style="color:#666;"></span>
+</div>
+<div class="irun-row">
+<label>ZOOM IRUN CS <input type="number" id="wiz_zoom_irun" min="3" max="16" step="1" value="5" style="width:64px;"></label>
+<button class="btn-secondary" onclick="applyIrun('zoom','wiz_')">Apply zoom</button>
+<span id="wiz_zoom_irun_amps" style="color:#666;"></span>
+</div>
+<button class="btn-primary" onclick="applyIrunAll('wiz_')">Apply all</button>
+<div id="wiz_motor_cal_log" class="zoom-cal-log" style="margin-top:12px;">Loading currents...</div>
+</div>
+<div id="wiz_step_3" class="wiz-step">
+<p>Free-run samples mid-range. Wide and tele start moving and mark when PWM rises. Click again to mark by ear if needed, then Save.</p>
+<div class="cal-step">
+<button class="btn-secondary" onclick="zoomCalCapture('free')">Capture free-run</button>
+</div>
+<div class="cal-step">
+<button class="btn-secondary" data-cal="wide" onclick="zoomCalCapture('wide')">Capture wide end</button>
+</div>
+<div class="cal-step">
+<button class="btn-secondary" data-cal="tele" onclick="zoomCalCapture('tele')">Capture tele end</button>
+</div>
+<button class="btn-primary" onclick="zoomCalSave()">Save calibration</button>
+<div id="setup_zoom_cal_log" class="zoom-cal-log" style="margin-top:12px;">Loading calibration...</div>
+</div>
+<div id="wiz_step_4" class="wiz-step">
+<p>Setup is done. Daily Drive stays on the main page. Re-open Zoom calibration or Motor calibration later to tweak.</p>
+<button class="btn-primary" onclick="closeSetupWizard()">Close</button>
+</div>
+<div class="wiz-nav">
+<button class="btn-secondary" id="wiz_back" onclick="setupWizardBack()">Back</button>
+<button class="btn-secondary" id="wiz_next" onclick="setupWizardNext()">Next</button>
+</div>
+</div>
+</div>
+<div id="motor_cal_modal" class="modal">
+<div class="modal-content wide">
+<div class="modal-header">
+<h2>Motor calibration</h2>
+<span class="close" onclick="closeMotorCalWizard()">&times;</span>
+</div>
+<p style="color:#666; font-size:14px;">
+IRUN CS is run current (3-16). I_rms ~ (CS+1)/32 * 0.325 / (0.11 * 1.414). Defaults: pan/tilt 11 (~0.78 A), zoom 5 (~0.39 A). Lower zoom if the rubber ring clicks; raise it if mid-range stalls. Lower pan/tilt if a hard stop grinds; raise if the axis loses steps under load. Apply writes the driver and saves it.
+</p>
+<div class="irun-row">
+<label>PAN IRUN CS <input type="number" id="pan_irun" min="3" max="16" step="1" value="11" style="width:64px;"></label>
+<button class="btn-secondary" onclick="applyIrun('pan')">Apply pan</button>
+<span id="pan_irun_amps" style="color:#666;"></span>
+</div>
+<div class="irun-row">
+<label>TILT IRUN CS <input type="number" id="tilt_irun" min="3" max="16" step="1" value="11" style="width:64px;"></label>
+<button class="btn-secondary" onclick="applyIrun('tilt')">Apply tilt</button>
+<span id="tilt_irun_amps" style="color:#666;"></span>
+</div>
+<div class="irun-row">
+<label>ZOOM IRUN CS <input type="number" id="zoom_irun" min="3" max="16" step="1" value="5" style="width:64px;"></label>
+<button class="btn-secondary" onclick="applyIrun('zoom')">Apply zoom</button>
+<span id="zoom_irun_amps" style="color:#666;"></span>
+</div>
+<button class="btn-primary" onclick="applyIrunAll()">Apply all</button>
+<button class="btn-secondary" onclick="closeMotorCalWizard()">Close</button>
+<div id="motor_cal_log" style="margin-top:12px;">Loading currents...</div>
+</div>
+</div>
+<div id="tmc_modal" class="modal">
+<div class="modal-content wide">
+<div class="modal-header">
+<h2>Motor debug (TMC)</h2>
+<span class="close" onclick="closeTmcWizard()">&times;</span>
+</div>
+<p style="color:#666; font-size:14px;">
+Probe checks UART1 (GPIO22/21). The E4 only ties those pins to the TMC PDN bus when two shunts sit on the I2C/USART1 column (P17) to the center TMC column (P18), not on the USB TX/RX column. IC version 0x21 = TMC2209, <b>write_ack</b> means IFCNT incremented so the driver actually heard a write.
+GCONF/CHOPCONF/version are read from the chip. IHOLD/IRUN/SGTHRS/TCOOLTHRS are write-only on TMC2209 (a read is always 0); the probe shows the values last written. Change run current in Motor calibration.
 </p>
 <div>
 <button class="btn-secondary" onclick="probeTmc()">Probe UART</button>
 <button class="btn-secondary" onclick="reconfigureTmc()">Re-send TMC config</button>
-<button class="btn-warning" onclick="spinSgSample()">Spin zoom + sample SG (2s)</button>
+<button class="btn-warning" onclick="spinSgSample()">Spin zoom + sample SG (reverse)</button>
 <button class="btn-primary" onclick="startLiveSg()">Start live SG</button>
 <button class="btn-danger" onclick="stopLiveSg()">Stop live SG</button>
 <select id="tmc_axis">
@@ -126,22 +274,8 @@ Jog/preset zoom is stall-stopped if the lens hits a hard stop (same SG threshold
 </select>
 </div>
 <div id="sg_bar" style="margin-top:12px;"><div id="sg_fill"></div><div id="sg_thresh"></div></div>
-<div id="sg_live" class="status status-info">SG: —</div>
+<div id="sg_live" class="status status-info">SG: --</div>
 <div id="tmc_log">No probe yet.</div>
-</div>
-<div class="section">
-<h2>Firmware Update (OTA)</h2>
-<p style="color: #666; font-size: 14px;">Upload a new firmware binary file to update the device over-the-air.</p>
-<input type="file" id="firmware_file" accept=".bin" style="margin: 10px 0; padding: 5px; width: 100%; max-width: 400px; border: 1px solid #ddd; border-radius: 4px;">
-<button class="btn-warning" onclick="uploadFirmware()" style="margin-top: 10px;">Upload Firmware</button>
-<div id="ota_status" style="margin-top: 10px; padding: 10px; border-radius: 5px; display: none;"></div>
-</div>
-<div class="section">
-<h2>Presets</h2>
-<div class="preset-grid" id="preset_grid"></div>
-<div style="margin-top: 10px;">
-<button class="btn-warning" onclick="savePreset()">Save Current Position</button>
-<input type="number" id="preset_save_idx" min="1" max="15" value="1" style="width: 60px; padding: 5px; margin-left: 10px;">
 </div>
 </div>
 <div id="preset_editor_modal" class="modal">
@@ -163,8 +297,8 @@ Jog/preset zoom is stall-stopped if the lens hits a hard stop (same SG threshold
 <h3>Motion Parameters</h3>
 <div class="form-row">
 <div><label>Max Speed (0=auto):</label><input type="number" id="editor_max_speed" min="0" step="10" value="0"></div>
-<div><label>Accel Factor:</label><input type="number" id="editor_accel_factor" min="0.1" max="10" step="0.1" value="1.0" disabled title="Not used — preset recall is constant velocity"></div>
-<div><label>Decel Factor:</label><input type="number" id="editor_decel_factor" min="0.1" max="10" step="0.1" value="1.0" disabled title="Not used — preset recall is constant velocity"></div>
+<div><label>Accel Factor:</label><input type="number" id="editor_accel_factor" min="0.1" max="10" step="0.1" value="1.0" disabled title="Not used - preset recall is constant velocity"></div>
+<div><label>Decel Factor:</label><input type="number" id="editor_decel_factor" min="0.1" max="10" step="0.1" value="1.0" disabled title="Not used - preset recall is constant velocity"></div>
 </div>
 <p style="color: #666; font-size: 12px; margin-top: 10px;">
 Max Speed: pan/tilt steps/sec for preset recall (0 = firmware default ~150). Zoom always uses the firmware zoom speed (~40) so a fast pan speed cannot skip the zoom axis.<br>
@@ -207,7 +341,22 @@ function updatePositions() {
     return r.json();
   }).then(data => {
     if (data && typeof data.pan === 'number' && typeof data.tilt === 'number' && typeof data.zoom === 'number') {
-      posEl.textContent = `PAN: ${data.pan.toFixed(1)} | TILT: ${data.tilt.toFixed(1)} | ZOOM: ${data.zoom.toFixed(1)}`;
+      posEl.textContent = `PAN: ${data.pan.toFixed(1)} | TILT: ${data.tilt.toFixed(1)} | ZOOM: ${data.zoom.toFixed(1)}` +
+        (typeof data.zoom_pct === 'number' ? ` (${data.zoom_pct.toFixed(0)}%)` : '') +
+        (data.zoom_cal_valid ? `  [${data.zoom_soft_min}..${data.zoom_soft_max}]` : '') +
+        (data.pan_irun != null ? `  | IRUN P${data.pan_irun}/T${data.tilt_irun}/Z${data.zoom_irun}` : '');
+      const banner = document.getElementById('setup_banner');
+      if (banner) {
+        banner.style.display = data.zoom_cal_valid ? 'none' : 'block';
+      }
+      const homeLog = document.getElementById('setup_home_log');
+      if (homeLog && document.getElementById('setup_wizard_modal').style.display === 'block') {
+        homeLog.textContent = data.homing ? 'Homing...' : (data.homed ? 'Homed.' : 'Not homed.');
+        if (data.homed && !data.homing && setupWizAwaitHome) {
+          setupWizAwaitHome = false;
+          setupWizardGoto(2);
+        }
+      }
       if (stateEl) {
         const homed = !!data.homed;
         const homing = !!data.homing;
@@ -227,7 +376,7 @@ function updatePositions() {
           line += ' | FAULT ' + faultBits.join(',');
         }
         if (!homed && !homing) {
-          line += ' — SAVE/GOTO blocked until HOME succeeds';
+          line += ' - SAVE/GOTO blocked until HOME succeeds';
         }
         if (typeof data.idle_rehome_s === 'number' && data.idle_rehome_s >= 0 && !homing && !moving) {
           const s = data.idle_rehome_s;
@@ -437,12 +586,19 @@ function updateVelocities() {
 document.getElementById('pan_vel').addEventListener('input', updateVelocities);
 document.getElementById('tilt_vel').addEventListener('input', updateVelocities);
 document.getElementById('zoom_vel').addEventListener('input', updateVelocities);
-function sendCommand(cmd) {
+function sendCommand(cmd, quiet) {
   fetch('/api/command', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({command: cmd})
   }).then(r => r.json()).then(data => {
+    if (cmd === 'stop') {
+      setCalDriveButtons('');
+      stopCalPoll();
+    }
+    if (quiet) {
+      return;
+    }
     if (data.status === 'ok') {
       alert('Command executed: ' + cmd);
     } else {
@@ -450,7 +606,9 @@ function sendCommand(cmd) {
     }
   }).catch(e => {
     console.error('Command failed:', e);
-    alert('Failed to send command');
+    if (!quiet) {
+      alert('Failed to send command');
+    }
   });
 }
 function gotoPreset(idx) {
@@ -573,9 +731,25 @@ function savePresetEditor() {
   });
 }
 window.onclick = function(event) {
-  const modal = document.getElementById('preset_editor_modal');
-  if (event.target == modal) {
+  const preset = document.getElementById('preset_editor_modal');
+  const cal = document.getElementById('zoom_cal_modal');
+  const tmc = document.getElementById('tmc_modal');
+  const motor = document.getElementById('motor_cal_modal');
+  const setup = document.getElementById('setup_wizard_modal');
+  if (event.target == preset) {
     closePresetEditor();
+  }
+  if (event.target == cal) {
+    closeZoomCalWizard();
+  }
+  if (event.target == tmc) {
+    closeTmcWizard();
+  }
+  if (event.target == motor) {
+    closeMotorCalWizard();
+  }
+  if (event.target == setup) {
+    closeSetupWizard();
   }
 };
 function uploadFirmware() {
@@ -654,6 +828,14 @@ function probeTmc() {
       ' homing_SG_threshold=' + data.sg_stall_threshold);
     lines.push('bus_echo tx=' + data.bus_echo_tx + ' rx=' + data.bus_echo_rx +
       ' hex=' + (data.bus_echo_hex || '(none)'));
+    lines.push('loopback_rx=' + data.loopback_rx +
+      ' hw_rxfifo=' + data.hw_rxfifo +
+      ' tx_done=' + data.tx_done);
+    lines.push('idle GPIO21=' + data.gpio21_idle + ' GPIO22=' + data.gpio22_idle +
+      ' out_sel=' + data.uart_out_sel_tx + ' in_sel=' + data.uart_in_sel_rx);
+    lines.push('pin_tie GPIO22->GPIO21 low=' + data.gpio21_when_tx_low +
+      ' high=' + data.gpio21_when_tx_high +
+      ' tied=' + data.pins_tied);
     (data.axes || []).forEach(a => {
       lines.push('');
       lines.push(a.axis + ' addr=' + a.address +
@@ -661,7 +843,8 @@ function probeTmc() {
         ' write_ack=' + a.write_ack +
         ' version=' + hex32(a.ic_version) + (a.ic_is_tmc2209 ? ' (TMC2209)' : ' (NOT 0x21)'));
       lines.push('  GCONF=' + hex32(a.gconf) + ' CHOPCONF=' + hex32(a.chopconf) +
-        ' IHOLD=' + a.ihold + ' IRUN=' + a.irun);
+        ' IHOLD=' + a.ihold + ' IRUN=' + a.irun +
+        ' PWM_SCALE=' + a.pwm_scale_sum + ' (IHOLD/IRUN/SGTHRS/TCOOLTHRS are write-only)');
       lines.push('  TCOOLTHRS=' + a.tcoolthrs + ' SGTHRS=' + a.sgthrs +
         ' SG_RESULT=' + a.sg_result + ' TSTEP=' + a.tstep +
         (a.motor_looks_stopped ? ' (stopped)' : (a.uart_ok ? ' (moving)' : '')));
@@ -691,6 +874,98 @@ function reconfigureTmc() {
     document.getElementById('tmc_log').textContent = 'Reconfigure failed: ' + e.message;
   });
 }
+function irunAmps(cs) {
+  return ((cs + 1) * 0.325 / (32 * 0.11 * 1.41421356)).toFixed(2);
+}
+function showIrunAxis(axis, cs, amps, prefix) {
+  prefix = prefix || '';
+  const inp = document.getElementById(prefix + axis + '_irun');
+  const amp = document.getElementById(prefix + axis + '_irun_amps');
+  if (inp && cs != null) {
+    inp.value = cs;
+  }
+  if (amp && cs != null) {
+    amp.textContent = '~' + (amps != null ? Number(amps).toFixed(2) : irunAmps(cs)) + ' A RMS';
+  }
+}
+function showIrun(data) {
+  if (!data) {
+    return;
+  }
+  ['', 'wiz_'].forEach(function(prefix) {
+    showIrunAxis('pan', data.pan_irun, data.pan_irun_amps, prefix);
+    showIrunAxis('tilt', data.tilt_irun, data.tilt_irun_amps, prefix);
+    showIrunAxis('zoom', data.zoom_irun, data.zoom_irun_amps, prefix);
+  });
+}
+function irunSummary(data) {
+  return 'PAN CS=' + data.pan_irun + ' (~' + Number(data.pan_irun_amps).toFixed(2) + ' A)  ' +
+         'TILT CS=' + data.tilt_irun + ' (~' + Number(data.tilt_irun_amps).toFixed(2) + ' A)  ' +
+         'ZOOM CS=' + data.zoom_irun + ' (~' + Number(data.zoom_irun_amps).toFixed(2) + ' A)';
+}
+function irunLogEl(prefix) {
+  return document.getElementById(prefix === 'wiz_' ? 'wiz_motor_cal_log' : 'motor_cal_log');
+}
+function refreshIrun() {
+  fetch('/api/tmc/irun').then(r => r.json()).then(data => {
+    showIrun(data);
+    const summary = irunSummary(data);
+    ['', 'wiz_'].forEach(function(prefix) {
+      const el = irunLogEl(prefix);
+      if (el && data) {
+        el.textContent = summary;
+      }
+    });
+  }).catch(e => {
+    const el = document.getElementById('motor_cal_log');
+    if (el) {
+      el.textContent = 'Current load failed: ' + e.message;
+    }
+  });
+}
+function applyIrun(axis, prefix) {
+  prefix = prefix || '';
+  const cs = parseInt(document.getElementById(prefix + axis + '_irun').value, 10);
+  const body = {};
+  body[axis + '_irun'] = cs;
+  const el = irunLogEl(prefix);
+  fetch('/api/tmc/irun', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  }).then(r => r.json()).then(data => {
+    showIrun(data);
+    if (el) {
+      el.textContent = (data.status === 'ok' ? 'Applied. ' : 'Apply failed. ') + irunSummary(data);
+    }
+  }).catch(e => {
+    if (el) {
+      el.textContent = 'IRUN apply failed: ' + e.message;
+    }
+  });
+}
+function applyIrunAll(prefix) {
+  prefix = prefix || '';
+  const el = irunLogEl(prefix);
+  fetch('/api/tmc/irun', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      pan_irun: parseInt(document.getElementById(prefix + 'pan_irun').value, 10),
+      tilt_irun: parseInt(document.getElementById(prefix + 'tilt_irun').value, 10),
+      zoom_irun: parseInt(document.getElementById(prefix + 'zoom_irun').value, 10)
+    })
+  }).then(r => r.json()).then(data => {
+    showIrun(data);
+    if (el) {
+      el.textContent = (data.status === 'ok' ? 'Applied all. ' : 'Apply failed. ') + irunSummary(data);
+    }
+  }).catch(e => {
+    if (el) {
+      el.textContent = 'IRUN apply failed: ' + e.message;
+    }
+  });
+}
 function applySgLive(data) {
   if (!data || !data.ok) {
     document.getElementById('sg_live').textContent = 'SG read failed: ' + (data && data.error ? data.error : 'UART');
@@ -701,7 +976,7 @@ function applySgLive(data) {
     data.axis + ' SG=' + data.sg_result +
     '  threshold=' + data.threshold +
     (data.would_stall ? '  WOULD STALL' : '') +
-    (data.motor_looks_stopped ? '  (TSTEP max — motor stopped, jog to see SG change)' : '  (moving)');
+    (data.motor_looks_stopped ? '  (TSTEP max - motor stopped, jog to see SG change)' : '  (moving)');
 }
 function startLiveSg() {
   stopLiveSg();
@@ -724,17 +999,21 @@ function spinSgSample() {
   fetch('/api/tmc/sg-sample', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ axis: tmcAxis(), samples: 30, interval_ms: 50, velocity: 50 })
+    body: JSON.stringify({ axis: tmcAxis(), samples: 12, interval_ms: 50, velocity: 120 })
   }).then(r => r.json()).then(data => {
     let lines = [data.status, data.axis + ' vel=' + data.velocity + ' threshold=' + data.threshold];
     if (data.samples_ok) {
       lines.push('min=' + data.sg_min + ' max=' + data.sg_max + ' avg=' + (data.sg_avg && data.sg_avg.toFixed ? data.sg_avg.toFixed(1) : data.sg_avg) +
         ' stall_hits=' + data.stall_hits + '/' + data.samples_ok);
-      lines.push('If min stays high, stallGuard is not seeing the stop (raise SGTHRS / HOME_ZOOM_SG_STALL_MAX).');
-      lines.push('If min is low while free-running, threshold is too sensitive (lower HOME_ZOOM_SG_STALL_MAX).');
+      if (data.tstep_min != null) {
+        lines.push('TSTEP min=' + data.tstep_min + ' max=' + data.tstep_max +
+          (data.tstep_max > 6000 ? '  (pulse rate dropped - ignore SG this run)' : '  (speed held)'));
+      }
+      lines.push('Free-run vs the rubber stop look the same on SG/PWM. Use Zoom calibration to mark ends; do not grind the ring.');
     }
     (data.points || []).forEach((p, i) => {
-      lines.push(String(i).padStart(2, '0') + '  SG=' + String(p.sg).padStart(4) + '  TSTEP=' + p.tstep);
+      lines.push(String(i).padStart(2, '0') + '  SG=' + String(p.sg).padStart(4) +
+        '  TSTEP=' + p.tstep + '  PWM=' + (p.pwm_scale_sum != null ? p.pwm_scale_sum : '?'));
     });
     log.textContent = lines.join('\n');
     if (data.sg_min !== undefined) {
@@ -744,11 +1023,250 @@ function spinSgSample() {
     log.textContent = 'Sample failed: ' + e.message;
   });
 }
+function fmtCalBand(name, b, extra) {
+  if (!b || !b.captured) {
+    return name + ': not captured';
+  }
+  return name + ': SG min=' + b.sg_min + ' max=' + b.sg_max + ' avg=' + b.sg_avg +
+    ' PWM ' + b.pwm_min + '..' + b.pwm_max + (extra ? extra : '');
+}
+function setCalDriveButtons(drivePhase) {
+  document.querySelectorAll('[data-cal="wide"]').forEach(function(el) {
+    el.textContent = (drivePhase === 'wide') ? 'Mark wide now (or wait for PWM)' : 'Capture wide end';
+  });
+  document.querySelectorAll('[data-cal="tele"]').forEach(function(el) {
+    el.textContent = (drivePhase === 'tele') ? 'Mark tele now (or wait for PWM)' : 'Capture tele end';
+  });
+}
+function showZoomCal(data) {
+  const logs = document.querySelectorAll('.zoom-cal-log');
+  if (!logs.length || !data) {
+    return;
+  }
+  setCalDriveButtons(data.drive_phase || '');
+  const lines = [];
+  if (data.status === 'moving') {
+    lines.push(data.hint || 'Moving... PWM auto-mark, or click again to mark by ear.');
+  }
+  if (data.error) {
+    lines.push('Error: ' + data.error);
+  }
+  if (data.status !== 'moving') {
+    lines.push(data.verdict || '');
+    lines.push(fmtCalBand('Free', data.free));
+    lines.push(fmtCalBand('Wide', data.wide, data.wide && data.wide.captured ? '  pos=' + data.wide_pos : ''));
+    lines.push(fmtCalBand('Tele', data.tele, data.tele && data.tele.captured ? '  pos=' + data.tele_pos : ''));
+    if (data.span_steps) {
+      lines.push('Span ' + data.span_steps + ' steps. Soft travel after save: ' + data.soft_min + '..' + data.soft_max);
+    }
+    if (data.pwm_thresh) {
+      lines.push('PWM trip=' + data.pwm_thresh + (data.pwm_usable ? ' (from cal)' : ' (default)'));
+    }
+    lines.push(data.valid
+      ? ('Saved. Live stall ' + (data.sg_usable ? ('ON threshold=' + data.sg_stall_max) : 'OFF') + '. PWM home ON.')
+      : 'Not saved yet.');
+  }
+  const text = lines.join('\n');
+  logs.forEach(function(el) {
+    if (el.id === 'wiz_motor_cal_log') {
+      return;
+    }
+    el.textContent = text;
+  });
+}
+function openZoomCalWizard() {
+  document.getElementById('zoom_cal_modal').style.display = 'block';
+  refreshZoomCal();
+}
+function closeZoomCalWizard() {
+  document.getElementById('zoom_cal_modal').style.display = 'none';
+}
+let calPollTimer = null;
+let calCaptureBusy = false;
+let setupWizStep = 1;
+let setupWizAwaitHome = false;
+function stopCalPoll() {
+  if (calPollTimer) {
+    clearInterval(calPollTimer);
+    calPollTimer = null;
+  }
+}
+function startCalPoll() {
+  stopCalPoll();
+  calPollTimer = setInterval(function() {
+    fetch('/api/zoom-cal').then(r => r.json()).then(data => {
+      showZoomCal(data);
+      if (data.pwm_hit && data.drive_phase && !calCaptureBusy) {
+        stopCalPoll();
+        zoomCalCapture(data.drive_phase);
+      }
+      if (!data.drive_phase) {
+        stopCalPoll();
+      }
+    }).catch(() => {});
+  }, 250);
+}
+function zoomCalCapture(phase) {
+  if (calCaptureBusy) {
+    return;
+  }
+  calCaptureBusy = true;
+  const logs = document.querySelectorAll('.zoom-cal-log');
+  logs.forEach(function(el) {
+    if (el.id !== 'wiz_motor_cal_log') {
+      el.textContent = (phase === 'free') ? 'Moving zoom and sampling free-run...' : 'Sending zoom command...';
+    }
+  });
+  fetch('/api/zoom-cal', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'capture', phase: phase })
+  }).then(r => r.text().then(t => {
+    let data;
+    try { data = JSON.parse(t); } catch (e) { throw new Error(t || r.status); }
+    if (!r.ok) {
+      throw new Error((data && (data.error || data.status)) || t || ('HTTP ' + r.status));
+    }
+    showZoomCal(data);
+    if (data.status === 'moving') {
+      startCalPoll();
+    } else {
+      stopCalPoll();
+    }
+  })).catch(e => {
+    logs.forEach(function(el) {
+      if (el.id !== 'wiz_motor_cal_log') {
+        el.textContent = 'Capture failed: ' + e.message;
+      }
+    });
+  }).then(function() {
+    calCaptureBusy = false;
+  });
+}
+function openTmcWizard() {
+  document.getElementById('tmc_modal').style.display = 'block';
+}
+function closeTmcWizard() {
+  stopLiveSg();
+  document.getElementById('tmc_modal').style.display = 'none';
+}
+function openMotorCalWizard() {
+  document.getElementById('motor_cal_modal').style.display = 'block';
+  refreshIrun();
+}
+function closeMotorCalWizard() {
+  document.getElementById('motor_cal_modal').style.display = 'none';
+}
+function refreshZoomCal() {
+  fetch('/api/zoom-cal').then(r => r.json()).then(showZoomCal)
+    .catch(e => {
+      document.querySelectorAll('.zoom-cal-log').forEach(function(el) {
+        if (el.id !== 'wiz_motor_cal_log') {
+          el.textContent = 'Cal load failed: ' + e.message;
+        }
+      });
+    });
+}
+function zoomCalSave() {
+  fetch('/api/zoom-cal', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'save' })
+  }).then(r => r.json()).then(data => {
+    showZoomCal(data);
+    if (data.status === 'ok' && data.valid && setupWizStep === 3) {
+      setupWizardGoto(4);
+    }
+    if (data.status === 'error') {
+      document.querySelectorAll('.zoom-cal-log').forEach(function(el) {
+        if (el.id !== 'wiz_motor_cal_log') {
+          el.textContent = 'Save failed: ' + (data.error || 'unknown') + '\n' + el.textContent;
+        }
+      });
+    }
+  }).catch(e => {
+    document.querySelectorAll('.zoom-cal-log').forEach(function(el) {
+      if (el.id !== 'wiz_motor_cal_log') {
+        el.textContent = 'Save failed: ' + e.message;
+      }
+    });
+  });
+}
+function zoomCalClear() {
+  fetch('/api/zoom-cal', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'clear' })
+  }).then(r => r.json()).then(showZoomCal)
+    .catch(e => {
+      document.querySelectorAll('.zoom-cal-log').forEach(function(el) {
+        if (el.id !== 'wiz_motor_cal_log') {
+          el.textContent = 'Clear failed: ' + e.message;
+        }
+      });
+    });
+}
+function setupWizardGoto(step) {
+  setupWizStep = step;
+  for (let i = 1; i <= 4; i++) {
+    const el = document.getElementById('wiz_step_' + i);
+    if (el) {
+      el.classList.toggle('active', i === step);
+    }
+  }
+  const label = document.getElementById('setup_wiz_step_label');
+  if (label) {
+    const names = {1: 'HOME', 2: 'Motor currents', 3: 'Zoom ends', 4: 'Done'};
+    label.textContent = 'Step ' + step + ' of 4 - ' + names[step];
+  }
+  const back = document.getElementById('wiz_back');
+  const next = document.getElementById('wiz_next');
+  if (back) {
+    back.style.display = (step > 1 && step < 4) ? 'inline-block' : (step === 1 ? 'inline-block' : 'none');
+    back.disabled = step <= 1;
+  }
+  if (next) {
+    next.style.display = step < 4 ? 'inline-block' : 'none';
+  }
+  if (step === 2) {
+    refreshIrun();
+  }
+  if (step === 3) {
+    refreshZoomCal();
+  }
+}
+function openSetupWizard() {
+  document.getElementById('setup_wizard_modal').style.display = 'block';
+  setupWizardGoto(1);
+}
+function closeSetupWizard() {
+  setupWizAwaitHome = false;
+  document.getElementById('setup_wizard_modal').style.display = 'none';
+}
+function setupWizardNext() {
+  if (setupWizStep < 4) {
+    setupWizardGoto(setupWizStep + 1);
+  }
+}
+function setupWizardBack() {
+  if (setupWizStep > 1) {
+    setupWizardGoto(setupWizStep - 1);
+  }
+}
+function setupWizardHome() {
+  const log = document.getElementById('setup_home_log');
+  if (log) {
+    log.textContent = 'Homing...';
+  }
+  setupWizAwaitHome = true;
+  sendCommand('home', true);
+}
 setTimeout(function() {
   try {
     updatePositions();
-    updatePosInterval = setInterval(updatePositions, 500);
+    updatePosInterval = setInterval(updatePositions, 700);
     createPresetButtons();
+    refreshZoomCal();
   } catch (e) {
     console.error('Initialization error:', e);
   }
