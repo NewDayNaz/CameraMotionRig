@@ -66,8 +66,8 @@
 
 /* Zoom: temporary step-count home (stallGuard disabled). Drive this many
  * steps toward wide, then set origin. Keep short so we don't grind the stop;
- * ~10 s at HOMING_ZOOM_VELOCITY. Soft travel limit stays MAX_ZOOM_RANGE_STEPS. */
-#define HOME_ZOOM_DRIVE_STEPS         500
+ * ~20 s at HOMING_ZOOM_VELOCITY. Soft travel limit stays MAX_ZOOM_RANGE_STEPS. */
+#define HOME_ZOOM_DRIVE_STEPS         1000
 
 /* Live zoom stall-stop (jog / preset). Same SG threshold as former homing.
  * Ignore a short run-up and direction changes so startup/backlash does not
