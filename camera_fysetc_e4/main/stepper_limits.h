@@ -24,7 +24,7 @@
 
 #define MAX_PAN_VELOCITY 1000.0f
 #define MAX_TILT_VELOCITY 1200.0f  /* a bit faster than pan — tilt gearing feels slower */
-#define MAX_ZOOM_VELOCITY 130.0f
+#define MAX_ZOOM_VELOCITY 145.0f
 
 #define MAX_PAN_RANGE_STEPS   18400
 #define MAX_TILT_RANGE_STEPS  15230
@@ -84,7 +84,7 @@
 #define IDLE_REHOME_MS                (6 * 60 * 60 * 1000)
 
 #define PRESET_PAN_TILT_VELOCITY  150.0f
-#define PRESET_ZOOM_VELOCITY         40.0f
+#define PRESET_ZOOM_VELOCITY         45.0f
 #define PRESET_BACKLASH_STEPS_PAN     8
 #define PRESET_BACKLASH_STEPS_TILT    8
 #define PRESET_BACKLASH_STEPS_ZOOM   16
