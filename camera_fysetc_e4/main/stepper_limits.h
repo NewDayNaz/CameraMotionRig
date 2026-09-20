@@ -24,7 +24,7 @@
 
 #define MAX_PAN_VELOCITY 1000.0f
 #define MAX_TILT_VELOCITY 1200.0f  /* a bit faster than pan — tilt gearing feels slower */
-#define MAX_ZOOM_VELOCITY 130.0f
+#define MAX_ZOOM_VELOCITY 145.0f
 
 #define MAX_PAN_RANGE_STEPS   18400
 #define MAX_TILT_RANGE_STEPS  15230
@@ -34,11 +34,11 @@
 #define ZOOM_PT_SCALE_MIN  0.5f
 
 #define HOMING_PAN_VELOCITY  200.0f
-#define HOMING_TILT_VELOCITY 200.0f
+#define HOMING_TILT_VELOCITY 300.0f
 #define HOMING_ZOOM_VELOCITY 50.0f
 
 #define HOMING_PAN_SLOW_VELOCITY  40.0f
-#define HOMING_TILT_SLOW_VELOCITY 40.0f
+#define HOMING_TILT_SLOW_VELOCITY 60.0f
 #define HOMING_ZOOM_SLOW_VELOCITY 25.0f
 
 #define HOMING_PAN_DIRECTION  1
@@ -66,8 +66,8 @@
 
 /* Zoom: temporary step-count home (stallGuard disabled). Drive this many
  * steps toward wide, then set origin. Keep short so we don't grind the stop;
- * ~10 s at HOMING_ZOOM_VELOCITY. Soft travel limit stays MAX_ZOOM_RANGE_STEPS. */
-#define HOME_ZOOM_DRIVE_STEPS         500
+ * ~20 s at HOMING_ZOOM_VELOCITY. Soft travel limit stays MAX_ZOOM_RANGE_STEPS. */
+#define HOME_ZOOM_DRIVE_STEPS         1000
 
 /* Live zoom stall-stop (jog / preset). Same SG threshold as former homing.
  * Ignore a short run-up and direction changes so startup/backlash does not
@@ -84,7 +84,7 @@
 #define IDLE_REHOME_MS                (6 * 60 * 60 * 1000)
 
 #define PRESET_PAN_TILT_VELOCITY  150.0f
-#define PRESET_ZOOM_VELOCITY         40.0f
+#define PRESET_ZOOM_VELOCITY         45.0f
 #define PRESET_BACKLASH_STEPS_PAN     8
 #define PRESET_BACKLASH_STEPS_TILT    8
 #define PRESET_BACKLASH_STEPS_ZOOM   16
