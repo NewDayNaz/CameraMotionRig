@@ -22,15 +22,16 @@
 #define MIN_PAN_TILT_VELOCITY 20.0f
 #define MIN_ZOOM_VELOCITY 10.0f
 
-#define MAX_PAN_VELOCITY 850.0f
-#define MAX_TILT_VELOCITY 1200.0f  /* a bit faster than pan — tilt gearing feels slower */
+#define MAX_PAN_VELOCITY 722.5f    /* was 850; −15% */
+#define MAX_TILT_VELOCITY 1020.0f  /* was 1200; −15%. Tilt still faster — gearing feels slower */
 #define MAX_ZOOM_VELOCITY 145.0f
 
 #define MAX_PAN_RANGE_STEPS   18400
 #define MAX_TILT_RANGE_STEPS  15230
 #define MAX_ZOOM_RANGE_STEPS  4000
 
-/* Pan/tilt jog scales with zoom: wide = 1.0, full telephoto = ZOOM_PT_SCALE_MIN. */
+/* Pan/tilt jog scales with zoom: wide = 1.0, full telephoto = ZOOM_PT_SCALE_MIN.
+ * Scale uses the calibrated zoom span when valid, else MAX_ZOOM_RANGE_STEPS. */
 #define ZOOM_PT_SCALE_MIN  0.5f
 
 #define HOMING_PAN_VELOCITY  170.0f
@@ -101,11 +102,15 @@
  * 6 h is longer than a service hold, short enough for days-on drift. */
 #define IDLE_REHOME_MS                (6 * 60 * 60 * 1000)
 
-#define PRESET_PAN_TILT_VELOCITY  150.0f
+#define PRESET_PAN_TILT_VELOCITY  127.5f  /* was 150; −15% */
 #define PRESET_ZOOM_VELOCITY         45.0f
 #define PRESET_BACKLASH_STEPS_PAN     8
 #define PRESET_BACKLASH_STEPS_TILT    8
 #define PRESET_BACKLASH_STEPS_ZOOM   16
+#define PRESET_MIN_DURATION_S         0.4f
+#define PRESET_MAX_DURATION_S        30.0f
+#define PRESET_RAMP_S                 0.4f  /* ease in/out time at cruise speed */
+#define PRESET_RAMP_MIN_STEPS        24
 
 /*
  * TMC2209 CS values 0–31. FYSETC E4 Rsense is ~0.11 Ω, vsense=0 (Vfs=0.325 V):
