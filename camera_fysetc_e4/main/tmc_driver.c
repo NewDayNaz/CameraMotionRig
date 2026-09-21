@@ -153,6 +153,7 @@ static volatile uint16_t s_zoom_sg_cache;
 static volatile uint32_t s_zoom_tstep_cache;
 static volatile uint8_t s_zoom_pwm_cache;
 static volatile uint8_t s_zoom_sg_cache_ok;
+static volatile uint32_t s_zoom_sg_cache_gen;
 
 static int tmc_uart_collect(uint8_t *buf, int max_len, TickType_t first_wait);
 static void tmc_bus_probe_unlocked(tmc_loopback_t *out);
@@ -456,6 +457,10 @@ static void tmc_zoom_sg_poll_task(void *arg)
             s_zoom_tstep_cache = ts;
             s_zoom_pwm_cache = pwm;
             s_zoom_sg_cache_ok = 1;
+            s_zoom_sg_cache_gen++;
+            if (s_zoom_sg_cache_gen == 0) {
+                s_zoom_sg_cache_gen = 1;
+            }
         }
         vTaskDelay(pdMS_TO_TICKS(HOME_ZOOM_SG_POLL_MS));
     }
@@ -741,6 +746,14 @@ bool tmc_driver_get_cached_sg_tstep_pwm(uint16_t *sg_result, uint32_t *tstep, ui
         *pwm_sum = s_zoom_pwm_cache;
     }
     return true;
+}
+
+uint32_t tmc_driver_zoom_cache_gen(void)
+{
+    if (!s_zoom_sg_cache_ok) {
+        return 0;
+    }
+    return s_zoom_sg_cache_gen;
 }
 
 void tmc_driver_set_standby(bool standby)

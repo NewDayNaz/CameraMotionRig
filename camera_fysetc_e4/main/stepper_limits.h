@@ -74,7 +74,7 @@
 #define HOME_ZOOM_CAL_PWM_GAP          4    /* free max + gap → auto-mark / home */
 #define HOME_ZOOM_PWM_PROBE_STEPS    200    /* leave the wide PWM lobe toward tele */
 #define HOME_ZOOM_PWM_IGNORE_STEPS    16    /* skip seek startup spike */
-#define HOME_ZOOM_PWM_HITS             4
+#define HOME_ZOOM_PWM_HITS             4    /* consecutive UART samples, not 1 ms ticks */
 #define HOME_ZOOM_PWM_SEAT_NEAR       40    /* already near wide when PWM trips */
 #define HOME_ZOOM_PWM_SEAT_FAR       200    /* PWM rises early; drive into the ring */
 #define HOME_ZOOM_PWM_MAX_STEPS       1200  /* first home without a saved span */

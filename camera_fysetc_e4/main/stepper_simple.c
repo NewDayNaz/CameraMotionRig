@@ -67,6 +67,7 @@ typedef struct {
     int32_t seek_ignore;
     bool wait_air; /* after leaving a loaded end, require PWM to drop before a wide trip */
     bool trip_armed; /* SEEK: saw air after ignore, next PWM rise is the rubber */
+    uint32_t pwm_gen; /* last UART cache generation counted toward debounce */
 } home_axis_state_t;
 
 typedef struct {
@@ -124,6 +125,7 @@ static bool zoom_origin_from_pwm = false;
 static bool zoom_pwm_stop_en = false;
 static uint8_t zoom_pwm_stop_thresh = HOME_ZOOM_PWM_THRESH;
 static uint8_t zoom_pwm_stop_hits = 0;
+static uint32_t zoom_pwm_stop_gen = 0;
 static bool zoom_pwm_stop_hit = false;
 
 #define MIN_STEP_DELAY_US 250
@@ -402,6 +404,7 @@ static void reset_zoom_live_stall(void)
 static void reset_zoom_pwm_stop(void)
 {
     zoom_pwm_stop_hits = 0;
+    zoom_pwm_stop_gen = 0;
     zoom_pwm_stop_hit = false;
 }
 
@@ -423,11 +426,17 @@ static void check_zoom_pwm_stop(void)
     if (!zoom_pwm_cached(&pwm)) {
         return;
     }
+    uint32_t gen = tmc_driver_zoom_cache_gen();
+    if (gen == 0 || gen == zoom_pwm_stop_gen) {
+        return;
+    }
+    zoom_pwm_stop_gen = gen;
     if (pwm >= zoom_pwm_stop_thresh) {
         zoom_pwm_stop_hits++;
         if (zoom_pwm_stop_hits >= HOME_ZOOM_PWM_HITS) {
             zoom_pwm_stop_hit = true;
-            ESP_LOGI(TAG, "ZOOM cal PWM trip PWM=%u thresh=%u",
+            halt_axis(AXIS_ZOOM);
+            ESP_LOGI(TAG, "ZOOM cal PWM trip PWM=%u thresh=%u — motor halted",
                      (unsigned)pwm, (unsigned)zoom_pwm_stop_thresh);
         }
     } else {
@@ -688,6 +697,7 @@ static void begin_home_phase(uint8_t axis, home_phase_t phase, bool toward_switc
     h->settle_ticks = 0;
     h->trip_armed = false;
     h->wait_air = false;
+    h->pwm_gen = 0;
     if (phase != HOME_PHASE_SETTLE) {
         set_homing_velocity(axis, toward_switch, slow);
     } else {
@@ -886,6 +896,11 @@ static void update_zoom_home(uint8_t axis, int32_t range)
     home_axis_state_t *h = &home_ax[axis];
     uint8_t pwm = 0;
     bool pwm_ok = zoom_pwm_cached(&pwm);
+    uint32_t gen = tmc_driver_zoom_cache_gen();
+    bool pwm_fresh = pwm_ok && gen != 0 && gen != h->pwm_gen;
+    if (pwm_fresh) {
+        h->pwm_gen = gen;
+    }
     uint8_t thresh = zoom_cal_pwm_thresh();
 
     if (h->phase == HOME_PHASE_RANGE_DRIVE) {
@@ -900,20 +915,20 @@ static void update_zoom_home(uint8_t axis, int32_t range)
     }
 
     if (h->phase == HOME_PHASE_ZOOM_PROBE) {
-        if (pwm_ok && pwm < thresh) {
-            h->debounce++;
-            if (h->debounce >= HOME_ZOOM_PWM_HITS) {
-                /* Confirmed air — skip startup spike, then the next PWM rise is wide. */
-                begin_home_phase(axis, HOME_PHASE_ZOOM_SEEK, true, false);
-                h->seek_ignore = HOME_ZOOM_PWM_IGNORE_STEPS;
-                h->wait_air = false;
+        if (pwm_fresh) {
+            if (pwm < thresh) {
+                h->debounce++;
+                if (h->debounce >= HOME_ZOOM_PWM_HITS) {
+                    begin_home_phase(axis, HOME_PHASE_ZOOM_SEEK, true, false);
+                    h->seek_ignore = HOME_ZOOM_PWM_IGNORE_STEPS;
+                    h->wait_air = false;
+                    return;
+                }
+            } else {
+                h->debounce = 0;
             }
-            return;
         }
-        h->debounce = 0;
         if (h->phase_steps >= HOME_ZOOM_PWM_PROBE_STEPS) {
-            /* Still loaded after a long peek toward tele: started on tele.
-             * Seek wide and wait for PWM to fall before the next rise is home. */
             ESP_LOGI(TAG, "ZOOM PWM still high after %ld-step probe — seeking wide",
                      (long)h->phase_steps);
             begin_home_phase(axis, HOME_PHASE_ZOOM_SEEK, true, false);
@@ -925,12 +940,15 @@ static void update_zoom_home(uint8_t axis, int32_t range)
 
     if (h->phase == HOME_PHASE_ZOOM_SEEK) {
         if (h->phase_steps >= zoom_home_max_seek()) {
-            /* PWM already high is the wide end — seat. Only fault if it never rose. */
+            if (h->wait_air) {
+                fail_current_home(axis, "zoom PWM never dropped after leaving an end");
+                return;
+            }
             if (pwm_ok && pwm >= thresh) {
                 ESP_LOGW(TAG,
-                         "ZOOM PWM still high at seek cap (%ld) PWM=%u — seating near",
+                         "ZOOM PWM still high at seek cap (%ld) PWM=%u — seating",
                          (long)h->phase_steps, (unsigned)pwm);
-                begin_zoom_seat(axis, h->wait_air ? 0 : h->phase_steps);
+                begin_zoom_seat(axis, h->phase_steps);
                 return;
             }
             if (!pwm_ok) {
@@ -941,10 +959,17 @@ static void update_zoom_home(uint8_t axis, int32_t range)
             return;
         }
         if (h->wait_air) {
-            if (pwm_ok && pwm < thresh) {
-                h->wait_air = false;
-                h->debounce = 0;
-                h->trip_armed = false;
+            if (pwm_fresh) {
+                if (pwm < thresh) {
+                    h->debounce++;
+                    if (h->debounce >= 2) {
+                        h->wait_air = false;
+                        h->debounce = 0;
+                        h->trip_armed = false;
+                    }
+                } else {
+                    h->debounce = 0;
+                }
             }
             return;
         }
@@ -952,7 +977,7 @@ static void update_zoom_home(uint8_t axis, int32_t range)
             h->debounce = 0;
             return;
         }
-        if (!pwm_ok) {
+        if (!pwm_fresh) {
             return;
         }
         if (!h->trip_armed) {
@@ -963,7 +988,6 @@ static void update_zoom_home(uint8_t axis, int32_t range)
                     h->debounce = 0;
                 }
             } else {
-                /* PWM high as soon as ignore ends: already on the ring. */
                 h->debounce++;
                 if (h->debounce >= HOME_ZOOM_PWM_HITS) {
                     ESP_LOGI(TAG, "ZOOM PWM home contact PWM=%u thresh=%u after %ld steps — seating",

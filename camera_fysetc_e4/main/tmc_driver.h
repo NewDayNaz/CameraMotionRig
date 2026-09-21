@@ -63,6 +63,8 @@ bool tmc_driver_read_sg_tstep_pwm(uint8_t axis, uint16_t *sg_result, uint32_t *t
 /** Last zoom SG/TSTEP/PWM from the background poll task (never call from the 1 ms step loop). */
 bool tmc_driver_get_cached_sg_tstep(uint16_t *sg_result, uint32_t *tstep);
 bool tmc_driver_get_cached_sg_tstep_pwm(uint16_t *sg_result, uint32_t *tstep, uint8_t *pwm_sum);
+/** Monotonic poll count while the zoom UART cache is valid; 0 if not yet filled. */
+uint32_t tmc_driver_zoom_cache_gen(void);
 bool tmc_driver_diagnose_axis(uint8_t axis, tmc_diag_t *out);
 bool tmc_driver_bus_echo(tmc_loopback_t *out);
 bool tmc_driver_reconfigure(void);
