@@ -192,6 +192,7 @@ static esp_err_t api_positions_handler(httpd_req_t *req) {
     cJSON_AddNumberToObject(json, "pan_irun", tmc_driver_get_irun(AXIS_PAN));
     cJSON_AddNumberToObject(json, "tilt_irun", tmc_driver_get_irun(AXIS_TILT));
     cJSON_AddNumberToObject(json, "zoom_irun", tmc_driver_get_irun(AXIS_ZOOM));
+    cJSON_AddBoolToObject(json, "preset_recall", st.preset_recall);
 
     char *json_string = cJSON_Print(json);
     httpd_resp_set_type(req, "application/json");
@@ -267,7 +268,8 @@ static esp_err_t api_command_handler(httpd_req_t *req) {
     
     const char *command = cmd->valuestring;
     bool success = false;
-    
+    bool recall_cmd = false;
+
     if (strcmp(command, "home") == 0) {
         stepper_simple_home();
         success = true;
@@ -275,13 +277,29 @@ static esp_err_t api_command_handler(httpd_req_t *req) {
         zoom_cal_clear_drive_state();
         stepper_simple_stop();
         success = true;
+    } else if (strcmp(command, "preset_recall_on") == 0) {
+        stepper_simple_set_preset_recall(true);
+        success = true;
+        recall_cmd = true;
+    } else if (strcmp(command, "preset_recall_off") == 0) {
+        stepper_simple_set_preset_recall(false);
+        success = true;
+        recall_cmd = true;
+    } else if (strcmp(command, "preset_recall_toggle") == 0) {
+        stepper_simple_set_preset_recall(!stepper_simple_preset_recall_enabled());
+        success = true;
+        recall_cmd = true;
     }
-    
+
     cJSON_Delete(json);
-    
+
     cJSON *response = cJSON_CreateObject();
     if (success) {
         cJSON_AddStringToObject(response, "status", "ok");
+        if (recall_cmd) {
+            cJSON_AddBoolToObject(response, "enabled",
+                                  stepper_simple_preset_recall_enabled());
+        }
     } else {
         cJSON_AddStringToObject(response, "status", "error");
         cJSON_AddStringToObject(response, "error", "Command failed");
@@ -293,6 +311,114 @@ static esp_err_t api_command_handler(httpd_req_t *req) {
     free(response_str);
     cJSON_Delete(response);
     
+    return ESP_OK;
+}
+
+static cJSON *preset_to_json_obj(uint8_t index, const preset_t *preset)
+{
+    cJSON *preset_json = cJSON_CreateObject();
+    cJSON_AddNumberToObject(preset_json, "index", index);
+    cJSON *pos_array = cJSON_CreateArray();
+    for (int i = 0; i < 3; i++) {
+        cJSON_AddItemToArray(pos_array, cJSON_CreateNumber(preset->pos[i]));
+    }
+    cJSON_AddItemToObject(preset_json, "pos", pos_array);
+    cJSON_AddStringToObject(preset_json, "name", preset->name);
+    cJSON_AddNumberToObject(preset_json, "duration_s", (double)preset->duration_s);
+    cJSON_AddNumberToObject(preset_json, "max_speed", preset->max_speed);
+    cJSON_AddBoolToObject(preset_json, "valid", preset->valid);
+    return preset_json;
+}
+
+static void json_add_preset_name(cJSON *response, uint8_t idx)
+{
+    preset_t p;
+    if (preset_load(idx, &p) && p.valid && p.name[0]) {
+        cJSON_AddStringToObject(response, "name", p.name);
+    }
+}
+
+// Handler for /api/presets - GET all preset names/slots
+static esp_err_t api_presets_list_handler(httpd_req_t *req)
+{
+    cJSON *response = cJSON_CreateObject();
+    cJSON *arr = cJSON_CreateArray();
+    for (uint8_t i = 0; i < MAX_PRESETS; i++) {
+        preset_t preset;
+        if (preset_load(i, &preset) && preset.valid) {
+            cJSON_AddItemToArray(arr, preset_to_json_obj(i, &preset));
+        } else {
+            cJSON *slot = cJSON_CreateObject();
+            cJSON_AddNumberToObject(slot, "index", i);
+            cJSON_AddBoolToObject(slot, "valid", false);
+            cJSON_AddStringToObject(slot, "name", "");
+            cJSON_AddNumberToObject(slot, "duration_s", 0);
+            cJSON_AddItemToArray(arr, slot);
+        }
+    }
+    cJSON_AddStringToObject(response, "status", "ok");
+    cJSON_AddItemToObject(response, "presets", arr);
+
+    char *response_str = cJSON_Print(response);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, response_str, strlen(response_str));
+    free(response_str);
+    cJSON_Delete(response);
+    return ESP_OK;
+}
+
+static void send_preset_recall_json(httpd_req_t *req)
+{
+    cJSON *response = cJSON_CreateObject();
+    cJSON_AddStringToObject(response, "status", "ok");
+    cJSON_AddBoolToObject(response, "enabled", stepper_simple_preset_recall_enabled());
+    char *response_str = cJSON_Print(response);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, response_str, strlen(response_str));
+    free(response_str);
+    cJSON_Delete(response);
+}
+
+/* GET/POST /api/preset/recall — enable, disable, or toggle MIDI/Companion GOTO. */
+static esp_err_t api_preset_recall_get_handler(httpd_req_t *req)
+{
+    send_preset_recall_json(req);
+    return ESP_OK;
+}
+
+static esp_err_t api_preset_recall_post_handler(httpd_req_t *req)
+{
+    char content[256];
+    int ret = httpd_req_recv(req, content, sizeof(content) - 1);
+    if (ret < 0) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    if (ret == 0) {
+        stepper_simple_set_preset_recall(!stepper_simple_preset_recall_enabled());
+        send_preset_recall_json(req);
+        return ESP_OK;
+    }
+    content[ret] = '\0';
+
+    cJSON *json = cJSON_Parse(content);
+    if (json == NULL) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    cJSON *item;
+    if ((item = cJSON_GetObjectItem(json, "toggle")) != NULL && cJSON_IsTrue(item)) {
+        stepper_simple_set_preset_recall(!stepper_simple_preset_recall_enabled());
+    } else if ((item = cJSON_GetObjectItem(json, "enabled")) != NULL && cJSON_IsBool(item)) {
+        stepper_simple_set_preset_recall(cJSON_IsTrue(item));
+    } else {
+        cJSON_Delete(json);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Need enabled or toggle");
+        return ESP_FAIL;
+    }
+    cJSON_Delete(json);
+    send_preset_recall_json(req);
     return ESP_OK;
 }
 
@@ -327,6 +453,7 @@ static esp_err_t api_preset_goto_handler(httpd_req_t *req) {
     cJSON *response = cJSON_CreateObject();
     if (success) {
         cJSON_AddStringToObject(response, "status", "ok");
+        json_add_preset_name(response, preset_idx);
     } else {
         cJSON_AddStringToObject(response, "status", "error");
         const char *err = stepper_simple_last_error();
@@ -374,6 +501,7 @@ static esp_err_t api_preset_save_handler(httpd_req_t *req) {
     cJSON *response = cJSON_CreateObject();
     if (success) {
         cJSON_AddStringToObject(response, "status", "ok");
+        json_add_preset_name(response, preset_idx);
     } else {
         cJSON_AddStringToObject(response, "status", "error");
         const char *err = stepper_simple_last_error();
@@ -413,21 +541,7 @@ static esp_err_t api_preset_get_handler(httpd_req_t *req) {
     cJSON *response = cJSON_CreateObject();
     if (success && preset.valid) {
         cJSON_AddStringToObject(response, "status", "ok");
-        cJSON *preset_json = cJSON_CreateObject();
-        
-        // Add position array
-        cJSON *pos_array = cJSON_CreateArray();
-        for (int i = 0; i < 3; i++) {
-            cJSON_AddItemToArray(pos_array, cJSON_CreateNumber(preset.pos[i]));
-        }
-        cJSON_AddItemToObject(preset_json, "pos", pos_array);
-        
-        cJSON_AddNumberToObject(preset_json, "max_speed", preset.max_speed);
-        cJSON_AddNumberToObject(preset_json, "accel_factor", preset.accel_factor);
-        cJSON_AddNumberToObject(preset_json, "decel_factor", preset.decel_factor);
-        cJSON_AddBoolToObject(preset_json, "valid", preset.valid);
-        
-        cJSON_AddItemToObject(response, "preset", preset_json);
+        cJSON_AddItemToObject(response, "preset", preset_to_json_obj(preset_idx, &preset));
     } else {
         cJSON_AddStringToObject(response, "status", "not_found");
     }
@@ -491,9 +605,10 @@ static esp_err_t api_preset_update_handler(httpd_req_t *req) {
     }
     
     preset_t preset;
-    preset_init_default(&preset);
-    
-    // Parse position array
+    if (!preset_load(preset_idx, &preset) || !preset.valid) {
+        preset_init_default(&preset);
+    }
+
     cJSON *pos_array = cJSON_GetObjectItem(json, "pos");
     if (pos_array != NULL && cJSON_IsArray(pos_array)) {
         int array_size = cJSON_GetArraySize(pos_array);
@@ -504,21 +619,33 @@ static esp_err_t api_preset_update_handler(httpd_req_t *req) {
             }
         }
     }
-    
-    // Parse other fields
+
     cJSON *item;
+    if ((item = cJSON_GetObjectItem(json, "name")) != NULL && cJSON_IsString(item) && item->valuestring) {
+        strncpy(preset.name, item->valuestring, PRESET_NAME_LEN - 1);
+        preset.name[PRESET_NAME_LEN - 1] = '\0';
+        preset_sanitize_name(preset.name);
+    }
+    if ((item = cJSON_GetObjectItem(json, "duration_s")) != NULL && cJSON_IsNumber(item)) {
+        float d = (float)item->valuedouble;
+        if (d > 0.0f && d < PRESET_MIN_DURATION_S) {
+            d = PRESET_MIN_DURATION_S;
+        }
+        if (d > PRESET_MAX_DURATION_S) {
+            d = PRESET_MAX_DURATION_S;
+        }
+        if (d < 0.0f) {
+            d = 0.0f;
+        }
+        preset.duration_s = d;
+        if (d >= PRESET_MIN_DURATION_S) {
+            preset.max_speed = 0.0f;
+        }
+    }
     if ((item = cJSON_GetObjectItem(json, "max_speed")) != NULL && cJSON_IsNumber(item)) {
         preset.max_speed = (float)item->valuedouble;
     }
-    if ((item = cJSON_GetObjectItem(json, "accel_factor")) != NULL && cJSON_IsNumber(item)) {
-        preset.accel_factor = (float)item->valuedouble;
-    }
-    if ((item = cJSON_GetObjectItem(json, "decel_factor")) != NULL && cJSON_IsNumber(item)) {
-        preset.decel_factor = (float)item->valuedouble;
-    }
-    if ((item = cJSON_GetObjectItem(json, "valid")) != NULL && cJSON_IsBool(item)) {
-        preset.valid = cJSON_IsTrue(item);
-    }
+    preset.valid = true;
     
     cJSON_Delete(json);
     
@@ -1434,6 +1561,27 @@ bool http_server_start(void) {
         };
         httpd_register_uri_handler(server_handle, &command_uri);
         
+        httpd_uri_t presets_list_uri = {
+            .uri = "/api/presets",
+            .method = HTTP_GET,
+            .handler = api_presets_list_handler,
+        };
+        httpd_register_uri_handler(server_handle, &presets_list_uri);
+
+        httpd_uri_t preset_recall_get_uri = {
+            .uri = "/api/preset/recall",
+            .method = HTTP_GET,
+            .handler = api_preset_recall_get_handler,
+        };
+        httpd_register_uri_handler(server_handle, &preset_recall_get_uri);
+
+        httpd_uri_t preset_recall_post_uri = {
+            .uri = "/api/preset/recall",
+            .method = HTTP_POST,
+            .handler = api_preset_recall_post_handler,
+        };
+        httpd_register_uri_handler(server_handle, &preset_recall_post_uri);
+
         httpd_uri_t preset_goto_uri = {
             .uri = "/api/preset/goto",
             .method = HTTP_POST,
