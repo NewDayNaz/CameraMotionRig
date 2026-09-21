@@ -304,7 +304,7 @@ GCONF/CHOPCONF/version are read from the chip. IHOLD/IRUN/SGTHRS/TCOOLTHRS are w
 <label>Seconds (0 = auto)</label>
 <input type="number" id="editor_duration" min="0" max="30" step="0.1" value="0">
 <p style="color: #666; font-size: 12px; margin-top: 10px;">
-All axes finish together. 0 uses default pan/tilt ~128 and zoom ~45 step/s, timed to the slowest axis. 2 is a typical on-air move. Moves ease in and out; backlash take-up stays at the end. After flashing, HOME then re-save shots if framing drifted.
+All axes finish together. 0 uses default pan/tilt ~128 and zoom ~80 step/s, timed to the slowest axis. Zoom never crawls below 80 (or 70 during ease). 2 is a typical on-air move. Moves ease in and out; backlash take-up stays at the end. After flashing, HOME then re-save shots if framing drifted.
 </p>
 </div>
 <div style="margin-top: 20px; text-align: right;">
@@ -387,7 +387,7 @@ function updatePositions() {
           const s = data.idle_rehome_s;
           const h = Math.floor(s / 3600);
           const m = Math.floor((s % 3600) / 60);
-          line += ' | idle re-home in ' + h + 'h ' + m + 'm';
+          line += ' | daily re-home in ' + h + 'h ' + m + 'm';
         }
         if (data.error && data.error !== 'Not homed') {
           line += '<br><span class="homed-no">' + data.error + '</span>';

@@ -22,7 +22,7 @@ typedef struct {
     bool moving;
     bool axis_fault[NUM_AXES];
     bool endstop[NUM_AXES];
-    /** Seconds until idle re-home, or -1 if moving/homing (countdown paused). */
+    /** Seconds until the 7:45 AM daily re-home, or -1 if moving/homing/no clock. */
     int32_t idle_rehome_s;
     float velocity[NUM_AXES];
     int32_t zoom_soft_min;
@@ -57,6 +57,8 @@ void stepper_simple_set_preset_recall(bool enabled);
 bool stepper_simple_preset_recall_enabled(void);
 
 void stepper_simple_home(void);
+/** Operator is using the rig (IRUN, cal, TMC). */
+void stepper_simple_touch_idle_timer(void);
 bool stepper_simple_is_homing(void);
 bool stepper_simple_is_homed(void);
 bool stepper_simple_is_moving(void);

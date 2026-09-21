@@ -137,13 +137,20 @@ void zoom_cal_recompute(void)
     }
 
     uint8_t free_hi = s_cal.free_run.pwm_max;
-    uint8_t end_lo = s_cal.wide.pwm_min;
-    if (s_cal.tele.pwm_min < end_lo) {
-        end_lo = s_cal.tele.pwm_min;
-    }
-    if (end_lo > free_hi + 1u) {
-        s_cal.pwm_thresh = (uint8_t)(((unsigned)free_hi + (unsigned)end_lo) / 2u);
+    /* Home to the wide rubber, not the midpoint of free vs ends (that tripped in air). */
+    uint8_t wide_lo = s_cal.wide.pwm_min;
+    if (s_cal.wide.captured && wide_lo > free_hi + 1u) {
+        s_cal.pwm_thresh = wide_lo;
         s_cal.pwm_usable = 1;
+    } else {
+        uint8_t end_lo = wide_lo;
+        if (s_cal.tele.captured && s_cal.tele.pwm_min < end_lo) {
+            end_lo = s_cal.tele.pwm_min;
+        }
+        if (end_lo > free_hi + 1u) {
+            s_cal.pwm_thresh = end_lo;
+            s_cal.pwm_usable = 1;
+        }
     }
 }
 
@@ -220,6 +227,12 @@ int32_t zoom_cal_rebase_wide(void)
 
 uint8_t zoom_cal_pwm_thresh(void)
 {
+    /* Prefer the measured wide rubber, even if NVS still has the old midpoint. */
+    if (s_cal.wide.captured && s_cal.free_run.captured &&
+        s_cal.wide.pwm_min > s_cal.free_run.pwm_max + 1u &&
+        s_cal.wide.pwm_min >= 40u && s_cal.wide.pwm_min <= 200u) {
+        return s_cal.wide.pwm_min;
+    }
     if (s_cal.pwm_thresh >= 40u && s_cal.pwm_thresh <= 200u) {
         return s_cal.pwm_thresh;
     }

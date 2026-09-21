@@ -47,7 +47,7 @@ It **does not** implement quintic/GPTimer cinematic planning. GOTO eases with a 
 
 SAVE/GOTO are refused until `HOMED=1`. Jogging pan/tilt back into a magnet stops motion, sets a fault, and clears `homed`. Zoom has no switch: **soft limits from calibration** keep jog short of each rubber end. Live stallGuard is off on this mechanics (SG bands overlap). After a reboot, HOME must PWM-seek wide again — the step counter is 0 even if the lens is mid-travel.
 
-After **6 hours with no steps**, the rig HOME-s again (does not invent zero) and returns to the pose it was holding. Manual HOME does not restore pose. `STOP` during that home aborts and leaves origin untrusted.
+After **7:45 AM America/Chicago** each day the rig HOME-s again (does not invent zero) and returns to the pose it was holding. If it is moving at 7:45, it retries until 8:30. Manual HOME does not restore pose. `STOP` during that home aborts and leaves origin untrusted.
 
 **After flashing this firmware, HOME all axes and re-save every preset.** Pull-off offset changes the origin.
 
@@ -68,14 +68,14 @@ Both lens ends raise `PWM_SCALE_SUM` (~84–86) vs free-run (~76–78) at 80 ste
 
 1. If PWM is already high, peek 12 steps toward tele (leave wide, or reverse off tele)
 2. Seek toward `HOMING_ZOOM_DIRECTION` (wide) at `HOME_ZOOM_CAL_SAMPLE_VEL` (80 step/s)
-3. Ignore a short startup window, then require three polls with PWM ≥ calibrated trip (default 81, midpoint of free vs ends after Save)
-4. Set that contact as position 0, pull off `HOME_ZOOM_CAL_MARGIN` (32) toward tele
+3. Ignore a short startup spike, confirm PWM is in air, then require PWM ≥ the **wide rubber** (calibrated wide min, else 84)
+4. Keep driving wide until TSTEP shows a stall, or 200 extra steps after a long seek (40 if HOME started already near wide). That contact is 0; pull off 32 toward tele.
 5. If UART is down, fall back to `HOME_ZOOM_DRIVE_STEPS` and invent zero — do not use this path if UART works
 6. If PWM never rises within the seek cap, **fault** zoom (do not invent origin)
 
 If a pan/tilt magnet is not found within range, that axis **faults**. The same for zoom if PWM never rises. A fault on any axis aborts HOME and clears `homed`. Boot HOME then recalls preset 1 if stored. `STOP` during homing aborts and leaves origin untrusted.
 
-Pan, tilt, and zoom home **at the same time**. Zoom seek ignores only a short startup window so a HOME from the pulled-off wide pose does not drive through the rubber before looking for PWM.
+Pan, tilt, and zoom home **at the same time**. PWM rises 100–200 steps before the rubber on this lens; home seats into the ring (or stops on TSTEP stall) instead of taking the first rise as 0.
 
 ### Zoom calibration (web UI)
 
@@ -95,7 +95,7 @@ Off unless calibration finds free-run `SG_RESULT` min at least 20 above both rub
 
 ### Idle re-home
 
-After `IDLE_REHOME_MS` (6 hours) with no step pulses, the rig runs a full HOME (still faults if a magnet/PWM end is missed) and then returns to the step counts it had before that home. Boot HOME still recalls preset 1; this idle pass does not. Manual HOME from the UI does not restore pose.
+After WiFi is up, a low-priority task tries NTP for at most 25 s, then **stops** the client so a LAN with no internet cannot retry DNS every few seconds. Success: refresh in 2 hours. Failure: wait 15 minutes and try again. The 1 ms step loop never waits on NTP. Until the clock is set, the 7:45 AM re-home is skipped. At **7:45 AM America/Chicago** the rig runs a full HOME and then returns to the step counts it had before that home. If it is moving at 7:45, it retries until 8:30, then waits until tomorrow. A successful HOME at or after 7:45 (including a boot HOME) counts for that day. Boot HOME still recalls preset 1; this daily pass does not. Manual HOME from the UI does not restore pose.
 
 Calibrate `MAX_*_RANGE_STEPS` by homing, jogging to the far stop, and reading `STATUS`.
 
@@ -103,7 +103,7 @@ Calibrate `MAX_*_RANGE_STEPS` by homing, jogging to the far stop, and reading `S
 
 Stored in NVS as software step counts, an optional short **name**, and a shared **duration** in seconds. Older blobs without name/duration still load. Accel/decel fields are unused. A leftover pan/tilt `max_speed` is only used when duration is 0 (legacy).
 
-Recall times all axes to the same duration (0 = auto from default pan/tilt 127.5 and zoom 45 step/s). Speed is clamped per axis so a long pan cannot force zoom past its max. Moves ease in and out over ~0.4 s at cruise; a short overshoot keeps the last motion software-positive. Arrival is counted pulses only — the counter is not written to the target.
+Recall times all axes to the same duration (0 = auto from default pan/tilt 127.5 and zoom 80 step/s). Zoom is never slowed below 80 step/s to wait for pan/tilt (it may finish first). Ease in/out never drops zoom below 70 step/s. Speed is clamped per axis so a long pan cannot force zoom past its max. Moves ease in and out over ~0.4 s at cruise; a short overshoot keeps the last motion software-positive. Arrival is counted pulses only — the counter is not written to the target.
 
 SAVE is refused while moving or if not homed. Saving the current pose keeps the existing name and duration.
 
@@ -154,7 +154,7 @@ If **tilt sags** on a long hold, raise `TMC_IHOLD_TILT` in [`main/stepper_limits
 ## Motion notes
 
 - Update task period is 1 ms, so practical pan/tilt ceiling is ~1000 step/s
-- Preset defaults: pan/tilt 127.5 step/s, zoom 45 step/s (used when duration is 0). Jog pan/tilt scale with the **calibrated zoom span**, not `MAX_ZOOM_RANGE_STEPS`. Max jog is pan 722.5 / tilt 1020 step/s.
+- Preset defaults: pan/tilt 127.5 step/s, zoom 80 step/s (used when duration is 0). Zoom GOTO never crawls below 80; ease never below 70. Jog pan/tilt scale with the **calibrated zoom span**, not `MAX_ZOOM_RANGE_STEPS`. Max jog is pan 722.5 / tilt 1020 / zoom 180 step/s.
 - Jog is slew-limited; preset and homing use immediate target velocity
 - Recursive mutex serializes HTTP, UART, and the step loop
 - Watchdog is fed from the update task

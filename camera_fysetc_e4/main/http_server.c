@@ -1276,6 +1276,7 @@ static esp_err_t api_zoom_cal_get_handler(httpd_req_t *req)
 
 static esp_err_t api_zoom_cal_post_handler(httpd_req_t *req)
 {
+    stepper_simple_touch_idle_timer();
     char content[256];
     int ret = httpd_req_recv(req, content, sizeof(content) - 1);
     if (ret <= 0) {
@@ -1425,6 +1426,7 @@ static esp_err_t api_zoom_cal_post_handler(httpd_req_t *req)
 
 static esp_err_t api_tmc_reconfigure_handler(httpd_req_t *req)
 {
+    stepper_simple_touch_idle_timer();
     bool ok = tmc_driver_reconfigure();
     cJSON *json = cJSON_CreateObject();
     cJSON_AddStringToObject(json, "status", ok ? "ok" : "error");
@@ -1508,6 +1510,7 @@ static esp_err_t api_tmc_irun_handler(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "pan_irun, tilt_irun, or zoom_irun 3-16 required");
         return ESP_FAIL;
     }
+    stepper_simple_touch_idle_timer();
     cJSON *out = cJSON_CreateObject();
     cJSON_AddStringToObject(out, "status", ok ? "ok" : "error");
     json_add_irun(out);

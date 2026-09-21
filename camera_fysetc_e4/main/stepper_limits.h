@@ -20,11 +20,11 @@
 #define STEPPER_LIMITS_H
 
 #define MIN_PAN_TILT_VELOCITY 20.0f
-#define MIN_ZOOM_VELOCITY 10.0f
+#define MIN_ZOOM_VELOCITY 70.0f
 
 #define MAX_PAN_VELOCITY 722.5f    /* was 850; −15% */
 #define MAX_TILT_VELOCITY 1020.0f  /* was 1200; −15%. Tilt still faster — gearing feels slower */
-#define MAX_ZOOM_VELOCITY 145.0f
+#define MAX_ZOOM_VELOCITY 180.0f
 
 #define MAX_PAN_RANGE_STEPS   18400
 #define MAX_TILT_RANGE_STEPS  15230
@@ -35,7 +35,7 @@
 #define ZOOM_PT_SCALE_MIN  0.5f
 
 #define HOMING_PAN_VELOCITY  170.0f
-#define HOMING_TILT_VELOCITY 300.0f
+#define HOMING_TILT_VELOCITY 450.0f
 #define HOMING_ZOOM_VELOCITY 50.0f
 
 #define HOMING_PAN_SLOW_VELOCITY  34.0f
@@ -68,12 +68,15 @@
 /* Zoom UART-down fallback only. PWM homing is the normal path. */
 #define HOME_ZOOM_DRIVE_STEPS         1000
 /* Default PWM_SCALE_SUM trip until calibration measures free vs ends
- * (free ~76-78, rubber ~84-86 at HOME_ZOOM_CAL_SAMPLE_VEL). */
-#define HOME_ZOOM_PWM_THRESH          81
+ * (free ~76-78, rubber ~84-86 at HOME_ZOOM_CAL_SAMPLE_VEL).
+ * Midpoint 81 was tripping 100–200 steps before the ring. */
+#define HOME_ZOOM_PWM_THRESH          84
 #define HOME_ZOOM_CAL_PWM_GAP          4    /* free max + gap → auto-mark / home */
-#define HOME_ZOOM_PWM_PROBE_STEPS     12    /* if already on an end, peek toward tele */
-#define HOME_ZOOM_PWM_IGNORE_STEPS    40
-#define HOME_ZOOM_PWM_HITS             3
+#define HOME_ZOOM_PWM_PROBE_STEPS    200    /* leave the wide PWM lobe toward tele */
+#define HOME_ZOOM_PWM_IGNORE_STEPS    16    /* skip seek startup spike */
+#define HOME_ZOOM_PWM_HITS             4
+#define HOME_ZOOM_PWM_SEAT_NEAR       40    /* already near wide when PWM trips */
+#define HOME_ZOOM_PWM_SEAT_FAR       200    /* PWM rises early; drive into the ring */
 #define HOME_ZOOM_PWM_MAX_STEPS       1200  /* first home without a saved span */
 #define SOFT_LIMIT_APPROACH_STEPS     40    /* scale jog/preset speed into a soft stop */
 
@@ -98,12 +101,18 @@
  * in air, so mixed speeds (100 vs 40) looked like a load gap last time. */
 #define HOME_ZOOM_CAL_SAMPLE_VEL      80.0f
 
-/* Overnight origin refresh. After this idle time, HOME then return to pose.
- * 6 h is longer than a service hold, short enough for days-on drift. */
-#define IDLE_REHOME_MS                (6 * 60 * 60 * 1000)
+/* Daily origin refresh at 7:45 AM America/Chicago. If the rig is moving at
+ * 7:45, retry until 8:30. After that, wait for tomorrow. Needs NTP. */
+#define IDLE_REHOME_TZ                "CST6CDT,M3.2.0/2,M11.1.0/2"
+#define IDLE_REHOME_HOUR              7
+#define IDLE_REHOME_MINUTE            45
+#define IDLE_REHOME_GRACE_MINUTE      45   /* 7:45–8:30 if busy */
+#define SNTP_SYNC_INTERVAL_MS         (2 * 60 * 60 * 1000)  /* refresh when NTP works */
+#define SNTP_RETRY_UNSYNCED_MS        (15 * 60 * 1000)  /* no internet: don't hammer DNS */
+#define SNTP_ATTEMPT_MS               (25 * 1000)       /* one burst, then stop */
 
 #define PRESET_PAN_TILT_VELOCITY  127.5f  /* was 150; −15% */
-#define PRESET_ZOOM_VELOCITY         45.0f
+#define PRESET_ZOOM_VELOCITY         80.0f
 #define PRESET_BACKLASH_STEPS_PAN     8
 #define PRESET_BACKLASH_STEPS_TILT    8
 #define PRESET_BACKLASH_STEPS_ZOOM   16
@@ -133,5 +142,6 @@
 #define TMC_IHOLD_STANDBY_ZOOM  0
 #define TMC_IHOLDDELAY          6
 #define MOTOR_STANDBY_MS        300000  /* 5 minutes */
+#define MOTOR_STANDBY_US        (300000LL * 1000LL)
 
 #endif // STEPPER_LIMITS_H

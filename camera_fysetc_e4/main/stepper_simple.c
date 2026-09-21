@@ -11,7 +11,7 @@
  * - Zoom live stallGuard halt is off unless calibration finds a free-run vs
  *   end-stop SG gap. Soft limits use the calibrated rubber-ring span.
  * - Jog/preset slow in the last SOFT_LIMIT_APPROACH_STEPS before a software stop
- * - After IDLE_REHOME_MS with no steps: HOME, then return to the pre-home pose
+ * - Daily 7:45 AM America/Chicago HOME, then return to the pre-home pose
  */
 
 #include "stepper_simple.h"
@@ -30,6 +30,7 @@
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
 
 static const char *TAG = "stepper_simple";
 
@@ -50,6 +51,7 @@ typedef enum {
     HOME_PHASE_RANGE_DRIVE, /* zoom UART-down fallback: drive N steps */
     HOME_PHASE_ZOOM_PROBE,  /* PWM high: peek toward tele to leave an end */
     HOME_PHASE_ZOOM_SEEK,   /* toward wide until PWM_SCALE_SUM rises */
+    HOME_PHASE_ZOOM_SEAT,   /* extra wide steps after PWM rise so 0 is the rubber */
     HOME_PHASE_ZOOM_PULLOFF,
     HOME_PHASE_SETTLE,
     HOME_PHASE_DONE,
@@ -64,6 +66,7 @@ typedef struct {
     int settle_ticks;
     int32_t seek_ignore;
     bool wait_air; /* after leaving a loaded end, require PWM to drop before a wide trip */
+    bool trip_armed; /* SEEK: saw air after ignore, next PWM rise is the rubber */
 } home_axis_state_t;
 
 typedef struct {
@@ -86,7 +89,8 @@ static home_axis_state_t home_ax[NUM_AXES];
 static uint8_t crash_debounce[NUM_AXES];
 static bool axis_fault[NUM_AXES];
 static bool motors_standby = false;
-static int64_t last_motion_us = 0;
+static int64_t last_step_us = 0;
+static int64_t last_operator_us = 0;
 
 static uint8_t zoom_live_sg_hits = 0;
 static int zoom_live_sg_poll_ticks = 0;
@@ -95,6 +99,9 @@ static int zoom_live_dir = 0;
 
 static bool idle_rehome_restore = false;
 static int32_t idle_rehome_pos[NUM_AXES];
+static int last_home_year = -1;
+static int last_home_yday = -1;
+static int last_home_minute = -1;
 
 static bool preset_move_active = false;
 static uint8_t preset_move_index = 0;
@@ -544,7 +551,11 @@ static void compute_move_speeds(const int32_t *current, const int32_t *target,
         if (dist[i] <= 0) {
             out_speed[i] = 0.0f;
         } else {
-            out_speed[i] = clamp_axis_speed((uint8_t)i, (float)dist[i] / t);
+            float speed = (float)dist[i] / t;
+            if (i == AXIS_ZOOM && speed < PRESET_ZOOM_VELOCITY) {
+                speed = PRESET_ZOOM_VELOCITY;
+            }
+            out_speed[i] = clamp_axis_speed((uint8_t)i, speed);
         }
     }
 }
@@ -592,15 +603,9 @@ static float preset_eased_speed(uint8_t axis, float cruise)
     }
 
     float v = cruise * scale;
-    if (remain <= 3) {
-        if (v < 8.0f) {
-            v = 8.0f;
-        }
-    } else {
-        float floor_v = get_axis_min_velocity(axis);
-        if (v < floor_v) {
-            v = (cruise < floor_v) ? cruise : floor_v;
-        }
+    float floor_v = get_axis_min_velocity(axis);
+    if (v < floor_v) {
+        v = floor_v;
     }
     return v;
 }
@@ -681,11 +686,24 @@ static void begin_home_phase(uint8_t axis, home_phase_t phase, bool toward_switc
     h->extra_start_steps = 0;
     h->extra_counting = false;
     h->settle_ticks = 0;
+    h->trip_armed = false;
+    h->wait_air = false;
     if (phase != HOME_PHASE_SETTLE) {
         set_homing_velocity(axis, toward_switch, slow);
     } else {
         halt_axis(axis);
     }
+}
+
+static void begin_zoom_seat(uint8_t axis, int32_t seek_steps)
+{
+    begin_home_phase(axis, HOME_PHASE_ZOOM_SEAT, true, false);
+    /* PWM rises well before the ring. A long seek means we came from air — drive
+     * into the stop (or until TSTEP says the pinion stalled). A short seek means
+     * we were already near wide; don't grind 200 steps into the rubber. */
+    home_ax[axis].extra_start_steps = (seek_steps > 80)
+        ? HOME_ZOOM_PWM_SEAT_FAR
+        : HOME_ZOOM_PWM_SEAT_NEAR;
 }
 
 static void finish_axis_home_success(uint8_t axis)
@@ -708,6 +726,15 @@ static void finish_axis_home_success(uint8_t axis)
     homing_active = false;
     homed = true;
     apply_zoom_cal_locked();
+    {
+        time_t wall = time(NULL);
+        struct tm local;
+        if (wall >= 1700000000 && localtime_r(&wall, &local) != NULL) {
+            last_home_year = local.tm_year;
+            last_home_yday = local.tm_yday;
+            last_home_minute = local.tm_hour * 60 + local.tm_min;
+        }
+    }
     ESP_LOGI(TAG, "Homing complete — all axes trusted");
 }
 
@@ -875,26 +902,37 @@ static void update_zoom_home(uint8_t axis, int32_t range)
     if (h->phase == HOME_PHASE_ZOOM_PROBE) {
         if (pwm_ok && pwm < thresh) {
             h->debounce++;
-            if (h->debounce >= HOME_ZOOM_PWM_HITS || h->phase_steps == 0) {
-                /* Already in air — only skip the current-spike window. */
-                h->seek_ignore = 8;
-                h->wait_air = false;
+            if (h->debounce >= HOME_ZOOM_PWM_HITS) {
+                /* Confirmed air — skip startup spike, then the next PWM rise is wide. */
                 begin_home_phase(axis, HOME_PHASE_ZOOM_SEEK, true, false);
+                h->seek_ignore = HOME_ZOOM_PWM_IGNORE_STEPS;
+                h->wait_air = false;
             }
             return;
         }
         h->debounce = 0;
         if (h->phase_steps >= HOME_ZOOM_PWM_PROBE_STEPS) {
-            ESP_LOGI(TAG, "ZOOM PWM still high after probe — seeking wide");
-            h->seek_ignore = 8;
-            h->wait_air = true; /* was on an end (likely tele); don't trip until PWM falls */
+            /* Still loaded after a long peek toward tele: started on tele.
+             * Seek wide and wait for PWM to fall before the next rise is home. */
+            ESP_LOGI(TAG, "ZOOM PWM still high after %ld-step probe — seeking wide",
+                     (long)h->phase_steps);
             begin_home_phase(axis, HOME_PHASE_ZOOM_SEEK, true, false);
+            h->seek_ignore = HOME_ZOOM_PWM_IGNORE_STEPS;
+            h->wait_air = true;
         }
         return;
     }
 
     if (h->phase == HOME_PHASE_ZOOM_SEEK) {
         if (h->phase_steps >= zoom_home_max_seek()) {
+            /* PWM already high is the wide end — seat. Only fault if it never rose. */
+            if (pwm_ok && pwm >= thresh) {
+                ESP_LOGW(TAG,
+                         "ZOOM PWM still high at seek cap (%ld) PWM=%u — seating near",
+                         (long)h->phase_steps, (unsigned)pwm);
+                begin_zoom_seat(axis, h->wait_air ? 0 : h->phase_steps);
+                return;
+            }
             if (!pwm_ok) {
                 fail_current_home(axis, "zoom PWM not updating (UART)");
             } else {
@@ -906,27 +944,41 @@ static void update_zoom_home(uint8_t axis, int32_t range)
             if (pwm_ok && pwm < thresh) {
                 h->wait_air = false;
                 h->debounce = 0;
+                h->trip_armed = false;
             }
             return;
         }
-        /* Ignore startup current only. Still trip if PWM is clearly loaded. */
-        if (h->phase_steps < h->seek_ignore && !(pwm_ok && pwm >= thresh && h->phase_steps >= 8)) {
+        if (h->phase_steps < h->seek_ignore) {
             h->debounce = 0;
             return;
         }
         if (!pwm_ok) {
             return;
         }
+        if (!h->trip_armed) {
+            if (pwm < thresh) {
+                h->debounce++;
+                if (h->debounce >= 2) {
+                    h->trip_armed = true;
+                    h->debounce = 0;
+                }
+            } else {
+                /* PWM high as soon as ignore ends: already on the ring. */
+                h->debounce++;
+                if (h->debounce >= HOME_ZOOM_PWM_HITS) {
+                    ESP_LOGI(TAG, "ZOOM PWM home contact PWM=%u thresh=%u after %ld steps — seating",
+                             (unsigned)pwm, (unsigned)thresh, (long)h->phase_steps);
+                    begin_zoom_seat(axis, h->phase_steps);
+                }
+            }
+            return;
+        }
         if (pwm >= thresh) {
             h->debounce++;
             if (h->debounce >= HOME_ZOOM_PWM_HITS) {
-                halt_axis(axis);
-                axes[axis].position = 0;
-                zoom_origin_from_pwm = true;
-                ESP_LOGI(TAG, "ZOOM PWM home contact PWM=%u thresh=%u after %ld steps — pull-off %d",
-                         (unsigned)pwm, (unsigned)thresh, (long)h->phase_steps,
-                         HOME_ZOOM_CAL_MARGIN);
-                begin_home_phase(axis, HOME_PHASE_ZOOM_PULLOFF, false, false);
+                ESP_LOGI(TAG, "ZOOM PWM home contact PWM=%u thresh=%u after %ld steps — seating",
+                         (unsigned)pwm, (unsigned)thresh, (long)h->phase_steps);
+                begin_zoom_seat(axis, h->phase_steps);
             }
         } else {
             h->debounce = 0;
@@ -934,9 +986,30 @@ static void update_zoom_home(uint8_t axis, int32_t range)
         return;
     }
 
+    if (h->phase == HOME_PHASE_ZOOM_SEAT) {
+        int32_t cap = h->extra_start_steps;
+        if (cap < HOME_ZOOM_PWM_SEAT_NEAR) {
+            cap = HOME_ZOOM_PWM_SEAT_NEAR;
+        }
+        /* Seat a counted distance. TSTEP is not a stall timer: the 25 ms UART
+         * cache holds the standstill value (~1e6) and the 1 ms loop jitter
+         * pushes a moving TSTEP 3400→8600, both of which looked like a timeout. */
+        if (h->phase_steps >= cap) {
+            halt_axis(axis);
+            axes[axis].position = 0;
+            zoom_origin_from_pwm = true;
+            ESP_LOGI(TAG,
+                     "ZOOM origin at rubber after %ld seat steps (cap=%ld) — pull-off %d",
+                     (long)h->phase_steps, (long)cap, HOME_ZOOM_CAL_MARGIN);
+            begin_home_phase(axis, HOME_PHASE_ZOOM_PULLOFF, false, false);
+        }
+        return;
+    }
+
     if (h->phase == HOME_PHASE_ZOOM_PULLOFF) {
         if (h->phase_steps >= HOME_ZOOM_CAL_MARGIN) {
             halt_axis(axis);
+            axes[axis].position = HOME_ZOOM_CAL_MARGIN;
             begin_home_phase(axis, HOME_PHASE_SETTLE, false, true);
         }
         return;
@@ -1182,19 +1255,61 @@ static void check_zoom_live_stall(void)
     reset_zoom_live_stall();
 }
 
+static void note_operator(void)
+{
+    last_operator_us = esp_timer_get_time();
+}
+
+#define IDLE_REHOME_TARGET_MIN  (IDLE_REHOME_HOUR * 60 + IDLE_REHOME_MINUTE)
+#define IDLE_REHOME_GRACE_END_MIN (IDLE_REHOME_TARGET_MIN + IDLE_REHOME_GRACE_MINUTE)
+
+static bool wall_clock_local(struct tm *local)
+{
+    time_t wall = time(NULL);
+    if (wall < 1700000000 || local == NULL) {
+        return false;
+    }
+    return localtime_r(&wall, local) != NULL;
+}
+
+static bool scheduled_home_already_today(const struct tm *local)
+{
+    if (last_home_year != local->tm_year || last_home_yday != local->tm_yday) {
+        return false;
+    }
+    return last_home_minute >= IDLE_REHOME_TARGET_MIN;
+}
+
 static int32_t idle_rehome_remaining_s(int64_t now_us)
 {
+    (void)now_us;
     if (homing_active || preset_move_active || any_velocity_nonzero()) {
         return -1;
     }
-    if (last_motion_us <= 0) {
+    struct tm local;
+    if (!wall_clock_local(&local)) {
         return -1;
     }
-    int64_t remain_us = ((int64_t)IDLE_REHOME_MS * 1000) - (now_us - last_motion_us);
-    if (remain_us < 0) {
-        remain_us = 0;
+
+    struct tm slot = local;
+    slot.tm_hour = IDLE_REHOME_HOUR;
+    slot.tm_min = IDLE_REHOME_MINUTE;
+    slot.tm_sec = 0;
+    slot.tm_isdst = -1;
+
+    int minutes = local.tm_hour * 60 + local.tm_min;
+    bool skip_today = scheduled_home_already_today(&local) ||
+                      minutes >= IDLE_REHOME_GRACE_END_MIN;
+    if (skip_today) {
+        slot.tm_mday += 1;
     }
-    return (int32_t)(remain_us / 1000000LL);
+
+    time_t then = mktime(&slot);
+    time_t wall = time(NULL);
+    if (then <= wall) {
+        return 0;
+    }
+    return (int32_t)(then - wall);
 }
 
 static void maybe_idle_rehome(int64_t now_us)
@@ -1202,10 +1317,21 @@ static void maybe_idle_rehome(int64_t now_us)
     if (homing_active || preset_move_active || any_velocity_nonzero()) {
         return;
     }
-    if (last_motion_us <= 0) {
+    static int64_t last_check_us;
+    if (last_check_us > 0 && (now_us - last_check_us) < 1000000LL) {
         return;
     }
-    if ((now_us - last_motion_us) < ((int64_t)IDLE_REHOME_MS * 1000)) {
+    last_check_us = now_us;
+
+    struct tm local;
+    if (!wall_clock_local(&local)) {
+        return;
+    }
+    if (scheduled_home_already_today(&local)) {
+        return;
+    }
+    int minutes = local.tm_hour * 60 + local.tm_min;
+    if (minutes < IDLE_REHOME_TARGET_MIN || minutes >= IDLE_REHOME_GRACE_END_MIN) {
         return;
     }
 
@@ -1213,8 +1339,8 @@ static void maybe_idle_rehome(int64_t now_us)
     for (int i = 0; i < NUM_AXES; i++) {
         idle_rehome_pos[i] = axes[i].position;
     }
-    ESP_LOGI(TAG, "Idle %.1f h — re-homing to refresh origin (restore pose=%d)",
-             (double)IDLE_REHOME_MS / 3600000.0, idle_rehome_restore ? 1 : 0);
+    ESP_LOGI(TAG, "Daily 7:45 AM re-home (local %02d:%02d, restore pose=%d)",
+             local.tm_hour, local.tm_min, idle_rehome_restore ? 1 : 0);
     restore_run_current();
     home_locked();
 }
@@ -1296,7 +1422,7 @@ static void generate_steps(int64_t now_us)
             tmc_driver_set_standby(false);
             motors_standby = false;
         }
-        last_motion_us = now_us;
+        last_step_us = now_us;
 
         if (axis_home_immediate_vel((uint8_t)i) &&
             home_ax[i].phase != HOME_PHASE_SETTLE) {
@@ -1459,7 +1585,8 @@ void stepper_simple_init(void)
     preset_move_active = false;
     preset_recall_enabled = preset_recall_load();
     startup_homing = true;
-    last_motion_us = esp_timer_get_time();
+    last_step_us = esp_timer_get_time();
+    last_operator_us = last_step_us;
     motors_standby = false;
     idle_rehome_restore = false;
     reset_zoom_live_stall();
@@ -1506,8 +1633,8 @@ void stepper_simple_update(void)
     check_zoom_pwm_stop();
 
     if (!homing_active && !preset_move_active && !any_velocity_nonzero()) {
-        if (!motors_standby && last_motion_us > 0 &&
-            (now_us - last_motion_us) >= ((int64_t)MOTOR_STANDBY_MS * 1000)) {
+        if (!motors_standby && last_step_us > 0 &&
+            (now_us - last_step_us) >= MOTOR_STANDBY_US) {
             tmc_driver_set_standby(true);
             motors_standby = true;
         }
@@ -1515,7 +1642,7 @@ void stepper_simple_update(void)
     } else if (motors_standby) {
         tmc_driver_set_standby(false);
         motors_standby = false;
-        last_motion_us = now_us;
+        last_step_us = now_us;
     }
 
     MOTION_UNLOCK();
@@ -1569,6 +1696,7 @@ void stepper_simple_set_velocities(float pan_vel, float tilt_vel, float zoom_vel
         }
         axes[i].target_velocity = v;
     }
+    note_operator();
 
     MOTION_UNLOCK();
 }
@@ -1615,6 +1743,7 @@ void stepper_simple_stop_zoom(void)
     axes[AXIS_ZOOM].velocity = 0.0f;
     axes[AXIS_ZOOM].move_direction = 0;
     reset_zoom_live_stall();
+    note_operator();
     MOTION_UNLOCK();
 }
 
@@ -1627,6 +1756,7 @@ void stepper_simple_nudge_zoom(float vel)
     if (!homing_active) {
         axes[AXIS_ZOOM].target_velocity = vel;
     }
+    note_operator();
     MOTION_UNLOCK();
 }
 
@@ -1641,6 +1771,7 @@ void stepper_simple_set_zoom_limit_holdoff(bool holdoff)
         zoom_pwm_stop_en = false;
         reset_zoom_pwm_stop();
     }
+    note_operator();
     MOTION_UNLOCK();
 }
 
@@ -1654,6 +1785,7 @@ void stepper_simple_arm_zoom_pwm_stop(uint8_t thresh)
     zoom_pwm_stop_en = true;
     reset_zoom_pwm_stop();
     reset_zoom_live_stall();
+    note_operator();
     MOTION_UNLOCK();
 }
 
@@ -1675,6 +1807,7 @@ void stepper_simple_shift_zoom(int32_t subtract)
     }
     MOTION_LOCK();
     axes[AXIS_ZOOM].position -= subtract;
+    note_operator();
     MOTION_UNLOCK();
 }
 
@@ -1684,6 +1817,7 @@ void stepper_simple_reload_zoom_cal(void)
         return;
     }
     MOTION_LOCK();
+    note_operator();
     apply_zoom_cal_locked();
     MOTION_UNLOCK();
 }
@@ -1724,6 +1858,7 @@ void stepper_simple_stop(void)
         return;
     }
     MOTION_LOCK();
+    note_operator();
     stop_locked(homing_active);
     MOTION_UNLOCK();
 }
@@ -1735,6 +1870,7 @@ bool stepper_simple_goto_preset(uint8_t preset_index)
         return false;
     }
     MOTION_LOCK();
+    note_operator();
     bool ok = goto_preset_locked(preset_index);
     MOTION_UNLOCK();
     return ok;
@@ -1747,6 +1883,7 @@ bool stepper_simple_save_preset(uint8_t preset_index)
         return false;
     }
     MOTION_LOCK();
+    note_operator();
     bool ok = save_preset_locked(preset_index);
     MOTION_UNLOCK();
     return ok;
@@ -1758,6 +1895,7 @@ void stepper_simple_set_preset_recall(bool enabled)
         return;
     }
     MOTION_LOCK();
+    note_operator();
     if (preset_recall_enabled == enabled) {
         MOTION_UNLOCK();
         return;
@@ -1791,8 +1929,19 @@ void stepper_simple_home(void)
         return;
     }
     MOTION_LOCK();
+    note_operator();
     idle_rehome_restore = false;
     home_locked();
+    MOTION_UNLOCK();
+}
+
+void stepper_simple_touch_idle_timer(void)
+{
+    if (!initialized) {
+        return;
+    }
+    MOTION_LOCK();
+    note_operator();
     MOTION_UNLOCK();
 }
 

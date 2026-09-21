@@ -52,7 +52,7 @@ bool zoom_cal_save(char *err, int err_sz);
 bool zoom_cal_clear(void);
 /** Shift stored wide/tele so the wide end is 0. Returns the subtracted origin. */
 int32_t zoom_cal_rebase_wide(void);
-/** PWM_SCALE_SUM trip for homing / auto-mark (calibrated, else default 81). */
+/** PWM_SCALE_SUM trip for homing / auto-mark (wide rubber, else default 84). */
 uint8_t zoom_cal_pwm_thresh(void);
 
 #endif /* ZOOM_CAL_H */
