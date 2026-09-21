@@ -13,18 +13,22 @@
 #include <stdbool.h>
 #include "board.h"
 
-// Maximum number of presets
 #define MAX_PRESETS 16
+#define PRESET_NAME_LEN 24
 
 /**
- * @brief Preset structure (simplified)
+ * Positions plus optional name and shared move duration.
+ * Older NVS blobs (no name/duration) still load; new fields default to empty/0.
  */
 typedef struct {
-    float pos[NUM_AXES];      // Target positions (pan, tilt, zoom)
-    float max_speed;          // Maximum speed for preset recall (steps/sec, 0 = use default)
-    float accel_factor;       // Legacy NVS field — ignored (constant-velocity recall)
-    float decel_factor;       // Legacy NVS field — ignored (constant-velocity recall)
-    bool valid;               // Is this preset valid/initialized?
+    float pos[NUM_AXES];
+    float max_speed;          /* legacy pan/tilt speed if duration_s == 0 */
+    float accel_factor;       /* unused */
+    float decel_factor;       /* unused */
+    bool valid;
+    uint8_t _pad[3];
+    char name[PRESET_NAME_LEN];
+    float duration_s;         /* 0 = auto (axes finish together at default speeds) */
 } preset_t;
 
 /**
@@ -60,10 +64,14 @@ bool preset_delete(uint8_t index);
  */
 void preset_init_default(preset_t* preset);
 
-/**
- * @brief Check if a preset is valid
- */
 bool preset_is_valid(uint8_t index);
+
+/** Keep letters, digits, space, - _ . Trim and NUL-terminate. */
+void preset_sanitize_name(char *name);
+
+/** MIDI/Companion/web GOTO. Missing NVS key means enabled. */
+bool preset_recall_load(void);
+void preset_recall_save(bool enabled);
 
 #endif // PRESET_STORAGE_H
 
