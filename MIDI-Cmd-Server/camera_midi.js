@@ -27,6 +27,26 @@ const NOTE_TO_PRESET_MAP = {
     15: 15, // Preset 15
 };
 
+const TOGGLE_RECALL_NOTE = 16;
+
+async function togglePresetRecallMidi() {
+    try {
+        const response = await axios.post(`${CONTROLLER_URL}/api/preset/recall`, {
+            toggle: true
+        }, {
+            headers: { 'Content-Type': 'application/json' },
+            timeout: 2000
+        });
+        if (response.data.status === 'ok') {
+            console.log(`Preset automations ${response.data.enabled ? 'ON' : 'OFF'}`);
+        } else {
+            console.error('Failed to toggle preset automations:', response.data.error || 'Unknown error');
+        }
+    } catch (error) {
+        console.error('Error toggling preset automations:', error.message);
+    }
+}
+
 async function recallPreset(presetIndex) {
     try {
         const response = await axios.post(`${CONTROLLER_URL}/api/preset/goto`, {
@@ -39,7 +59,8 @@ async function recallPreset(presetIndex) {
         });
         
         if (response.data.status === 'ok') {
-            console.log(`Successfully recalled preset ${presetIndex}`);
+            const name = response.data.name ? ` (${response.data.name})` : '';
+            console.log(`Successfully recalled preset ${presetIndex}${name}`);
         } else {
             console.error(`Failed to recall preset ${presetIndex}:`, response.data.error || 'Unknown error');
         }
@@ -53,6 +74,10 @@ async function init() {
     input.on('noteon', async function (msg) {
         // Only process notes on channel 1 with velocity > 0
         if (msg.channel == 1 && msg.velocity > 0) {
+            if (msg.note === TOGGLE_RECALL_NOTE) {
+                await togglePresetRecallMidi();
+                return;
+            }
             const presetIndex = NOTE_TO_PRESET_MAP[msg.note];
             
             if (presetIndex !== undefined && presetIndex !== null) {
