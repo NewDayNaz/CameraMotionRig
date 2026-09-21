@@ -179,6 +179,12 @@ class Controller:
         data = self._request("GET", "/api/presets")
         return list(data.get("presets") or [])
 
+    def get_preset(self, index: int) -> dict:
+        return self._request("GET", "/api/preset/get", params={"index": int(index)})
+
+    def save_preset(self, index: int) -> dict:
+        return self._request("POST", "/api/preset/save", json={"index": int(index)})
+
     def goto_preset(self, index: int) -> dict:
         return self._request("POST", "/api/preset/goto", json={"index": int(index)})
 

@@ -93,6 +93,44 @@ class ZoomPtScaleResult:
 
 
 @dataclass
+class RepeatCycle:
+    stage: str
+    cycle: int
+    approach: str
+    axes: list[str]
+    dx_px: float
+    dy_px: float
+    mag_px: float
+    scale: float
+    ncc: float
+    fw_err_pan: float
+    fw_err_tilt: float
+    fw_err_zoom: float
+    settle_s: float
+    note: str = ""
+
+
+@dataclass
+class RepeatStage:
+    name: str
+    axes: list[str]
+    cycles: list[RepeatCycle] = field(default_factory=list)
+
+
+@dataclass
+class RepeatabilityReport:
+    preset_index: int = 1
+    preset_name: str = ""
+    target_pan: float = 0.0
+    target_tilt: float = 0.0
+    target_zoom: float = 0.0
+    duration_s: float = 0.0
+    stages: list[RepeatStage] = field(default_factory=list)
+    hypotheses: list[str] = field(default_factory=list)
+    llm_block: str = ""
+
+
+@dataclass
 class TunerReport:
     stillness_floor: float = 0.0
     stillness_floor_px_s: float = 0.0
@@ -103,6 +141,7 @@ class TunerReport:
     goto: Optional[GotoResult] = None
     irun: list[IrunPoint] = field(default_factory=list)
     zoom_pt_scale: Optional[ZoomPtScaleResult] = None
+    repeatability: Optional[RepeatabilityReport] = None
     notes: list[str] = field(default_factory=list)
 
     def suggestions_text(self) -> str:
@@ -223,6 +262,181 @@ def suggest_zoom_pt_scale(res: ZoomPtScaleResult) -> tuple[float, str]:
     )
 
 
+def _median(vals: list[float]) -> float:
+    if not vals:
+        return 0.0
+    s = sorted(vals)
+    n = len(s)
+    if n % 2:
+        return s[n // 2]
+    return 0.5 * (s[n // 2 - 1] + s[n // 2])
+
+
+def _p95(vals: list[float]) -> float:
+    if not vals:
+        return 0.0
+    s = sorted(vals)
+    i = min(len(s) - 1, max(0, int(round(0.95 * (len(s) - 1)))))
+    return s[i]
+
+
+def build_repeat_hypotheses(rep: RepeatabilityReport) -> list[str]:
+    """Map residuals onto firmware knobs. Conservative — NDI delay is not backlash."""
+    out: list[str] = []
+    by_name = {s.name: s for s in rep.stages}
+
+    def split(stage: RepeatStage) -> tuple[list[RepeatCycle], list[RepeatCycle]]:
+        below = [c for c in stage.cycles if c.approach == "from_below"]
+        above = [c for c in stage.cycles if c.approach == "from_above"]
+        return below, above
+
+    def mag_med(cs: list[RepeatCycle]) -> float:
+        return _median([c.mag_px for c in cs]) if cs else 0.0
+
+    def scale_err(cs: list[RepeatCycle]) -> float:
+        return _median([abs(c.scale - 1.0) for c in cs]) if cs else 0.0
+
+    def fw_mag(cs: list[RepeatCycle], axis: str) -> float:
+        key = {"pan": "fw_err_pan", "tilt": "fw_err_tilt", "zoom": "fw_err_zoom"}[axis]
+        return _median([abs(float(getattr(c, key))) for c in cs]) if cs else 0.0
+
+    for name, axis, backlash_key, default in (
+        ("pan", "pan", "PRESET_BACKLASH_STEPS_PAN", 8),
+        ("tilt", "tilt", "PRESET_BACKLASH_STEPS_TILT", 8),
+        ("zoom", "zoom", "PRESET_BACKLASH_STEPS_ZOOM", 16),
+    ):
+        st = by_name.get(name)
+        if st is None or not st.cycles:
+            continue
+        below, above = split(st)
+        mb, ma = mag_med(below), mag_med(above)
+        se = scale_err(st.cycles)
+        fw = fw_mag(st.cycles, axis)
+        if fw > 3:
+            out.append(
+                f"{name}: firmware missed the saved count by ~{fw:.0f} steps "
+                f"(image residual {max(mb, ma):.1f} px). This is counting/HOME, not {backlash_key}."
+            )
+            continue
+        if name == "zoom":
+            se_ok = [c for c in st.cycles if 0.5 <= c.scale <= 1.8]
+            se = scale_err(se_ok) if se_ok else 0.0
+            if se >= 0.012 and max(mb, ma) < 4.0:
+                out.append(
+                    f"zoom: scale residual {se:.3f} with small slide — pinion skip or {backlash_key} "
+                    f"(now {default}). Try 20–24 if from_above is worse; try 10–12 if from_below is worse."
+                )
+        # 8 take-up steps cannot explain tens of pixels at this sanctuary FOV.
+        if ma > 15.0 and ma > 1.55 * max(mb, 0.4) and fw < 3:
+            out.append(
+                f"{name}: from_above {ma:.1f} px vs from_below {mb:.1f} px with fw_err≈0. "
+                f"Open-loop counts landed; the picture did not. That is lost steps on the reverse/"
+                f"overshoot path, not {default} steps of {backlash_key}. Do not raise take-up to close "
+                f"{ma:.0f} px. Try slower PRESET_PAN_TILT_VELOCITY on recalls, or more pan IRUN if it skips."
+            )
+        elif ma > 3.0 and ma > 1.55 * max(mb, 0.4):
+            rec = min(24, default + 4)
+            out.append(
+                f"{name}: from_above residual {ma:.1f} px vs from_below {mb:.1f} px — "
+                f"uni-directional take-up looks short. Candidate: {backlash_key} {default} → {rec}."
+            )
+        elif mb > 3.0 and mb > 1.55 * max(ma, 0.4):
+            rec = max(4, default - 4)
+            out.append(
+                f"{name}: from_below residual {mb:.1f} px vs from_above {ma:.1f} px — "
+                f"take-up may be overshooting. Candidate: {backlash_key} {default} → {rec}."
+            )
+        elif max(mb, ma) < 2.5:
+            out.append(f"{name}: residuals < 2.5 px both approaches — leave {backlash_key}={default}.")
+
+    pan = by_name.get("pan")
+    if pan:
+        _pb, pabove = split(pan)
+        pax = mag_med(pabove)
+        pdx = _median([c.dx_px for c in pabove]) if pabove else 0.0
+        for name in ("tilt", "zoom"):
+            st = by_name.get(name)
+            if not st or pax < 20:
+                continue
+            dxs = [c.dx_px for c in st.cycles]
+            if dxs and abs(_median(dxs) - pdx) < 12 and mag_med(st.cycles) > 20:
+                out.append(
+                    f"{name}: ~{mag_med(st.cycles):.0f} px matches leftover pan from_above "
+                    f"(dx≈{pdx:.0f}) — pan never retraced. Ignore this stage for {name} backlash."
+                )
+
+    stacked = by_name.get("pan+tilt")
+    pan = by_name.get("pan")
+    tilt = by_name.get("tilt")
+    if stacked and pan and tilt and stacked.cycles and pan.cycles and tilt.cycles:
+        sm = mag_med(stacked.cycles)
+        add = mag_med(pan.cycles) + mag_med(tilt.cycles)
+        if sm > 4.0 and sm > 1.4 * max(add, 0.5):
+            out.append(
+                f"pan+tilt stacked {sm:.1f} px vs pan+tilt singles {add:.1f} px — "
+                "lost steps accumulating, not a single-axis backlash miss. Do not raise IRUN from this test."
+            )
+    full = by_name.get("pan+tilt+zoom")
+    if full and stacked and full.cycles and stacked.cycles:
+        if mag_med(full.cycles) > 4.0 and scale_err(full.cycles) > 0.012:
+            out.append(
+                "full stack: zoom scale error appears only when pan/tilt also move — "
+                "check zoom IRUN (stall vs skip) on the web UI, not PRESET_RAMP_S."
+            )
+    if not out:
+        out.append("No backlash/ramp change is justified from this run. Keep stepper_limits.h as-is.")
+    out.append("Do not treat NDI settle lag as ease-out error. Do not snap the step counter to the target.")
+    return out
+
+
+def format_repeatability(rep: RepeatabilityReport) -> str:
+    lines = [
+        "======== PASTE THIS BLOCK TO THE LLM ========",
+        "Camera Motion Rig — preset recall repeatability (NDI vs counted pulses).",
+        "Goal: shot composition is open-loop from a trusted HOME. Firmware must not invent origin or snap-to-target.",
+        "",
+        "Firmware knobs (stepper_limits.h):",
+        f"  PRESET_BACKLASH_STEPS_PAN={FIRMWARE['PRESET_BACKLASH_STEPS_PAN']}  "
+        f"TILT={FIRMWARE['PRESET_BACKLASH_STEPS_TILT']}  "
+        f"ZOOM={FIRMWARE['PRESET_BACKLASH_STEPS_ZOOM']}",
+        f"  PRESET_RAMP_S={FIRMWARE['PRESET_RAMP_S']}  "
+        f"PRESET_PAN_TILT_VELOCITY={FIRMWARE['PRESET_PAN_TILT_VELOCITY']}  "
+        f"PRESET_ZOOM_VELOCITY={FIRMWARE['PRESET_ZOOM_VELOCITY']}",
+        "  Backlash take-up is uni-directional: extra path only when current > target (from_above).",
+        "  from_below = current < target, direct approach. from_above = overshoot then approach.",
+        "",
+        f"Target preset {rep.preset_index} {rep.preset_name!r} duration={rep.duration_s:.2f}s",
+        f"  saved counts pan={rep.target_pan:.0f} tilt={rep.target_tilt:.0f} zoom={rep.target_zoom:.0f}",
+        "  mag_px = NDI translation vs first settled grab (640-wide). scale=1 is same FOV.",
+        "  fw_err = firmware position minus saved counts after GOTO idle.",
+        "",
+    ]
+    for st in rep.stages:
+        lines.append(f"### {st.name}  axes={','.join(st.axes)}")
+        if not st.cycles:
+            lines.append("  (no cycles)")
+            continue
+        mags = [c.mag_px for c in st.cycles]
+        scales = [abs(c.scale - 1.0) for c in st.cycles]
+        lines.append(
+            f"  n={len(st.cycles)}  mag median={_median(mags):.2f} px  p95={_p95(mags):.2f} px  "
+            f"|scale-1| median={_median(scales):.4f}"
+        )
+        for c in st.cycles:
+            lines.append(
+                f"  c{c.cycle} {c.approach:11}  mag={c.mag_px:6.2f} px  dx={c.dx_px:+6.2f} dy={c.dy_px:+6.2f}  "
+                f"scale={c.scale:.4f} ncc={c.ncc:.3f}  "
+                f"fw_err P{c.fw_err_pan:+.0f}/T{c.fw_err_tilt:+.0f}/Z{c.fw_err_zoom:+.0f}  "
+                f"settle={c.settle_s:.1f}s {c.note}"
+            )
+        lines.append("")
+    lines.append("Hypotheses (only if the numbers support them):")
+    for h in (rep.hypotheses or build_repeat_hypotheses(rep)):
+        lines.append(f"  - {h}")
+    lines.append("======== END LLM BLOCK ========")
+    return "\n".join(lines)
+
+
 def np_median(vals: list[float]) -> float:
     if not vals:
         return 0.0
@@ -243,12 +457,25 @@ def format_suggestions(report: TunerReport) -> str:
         f"NDI/motion latency (flow rise after command): {report.latency_s*1000:.0f} ms",
         "",
     ]
+    if report.repeatability:
+        lines.append(format_repeatability(report.repeatability))
+        lines.append("")
+        if (
+            not report.sweep
+            and not report.ranges
+            and report.goto is None
+            and not report.irun
+            and report.zoom_pt_scale is None
+        ):
+            lines.append("Do not auto-flash. Paste the LLM block above to tweak backlash or ramp.")
+            return "\n".join(lines)
     if (
         not report.sweep
         and not report.ranges
         and report.goto is None
         and not report.irun
         and report.zoom_pt_scale is None
+        and report.repeatability is None
     ):
         if report.stillness_floor_px_s < 0.05:
             lines.append("Stillness is clean — the NDI picture is not drifting. Run Sweep pan next.")

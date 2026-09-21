@@ -24,6 +24,9 @@ FIRMWARE = {
     "PRESET_PAN_TILT_VELOCITY": 127.5,
     "PRESET_ZOOM_VELOCITY": 80.0,
     "PRESET_RAMP_S": 0.4,
+    "PRESET_BACKLASH_STEPS_PAN": 8,
+    "PRESET_BACKLASH_STEPS_TILT": 8,
+    "PRESET_BACKLASH_STEPS_ZOOM": 16,
     "HOME_TILT_PULLOFF_STEPS": 80,
     "ZOOM_PT_SCALE_MIN": 0.5,
 }
@@ -51,6 +54,10 @@ SWEEP_SPEEDS = {
 TUNER_TRAVEL_BUDGET = {"pan": 700, "tilt": 900, "zoom": 350}
 SWEEP_MEASURE_S = {"pan": 0.70, "tilt": 0.70, "zoom": 1.15}
 SWEEP_SPINUP_S = {"pan": 0.30, "tilt": 0.30, "zoom": 0.45}
+
+# Preset recall test: jog this far off the saved shot, then GOTO back.
+REPEAT_EXCURSION = {"pan": 260, "tilt": 260, "zoom": 140}
+REPEAT_LOOPS = 2
 
 
 @dataclass

@@ -12,6 +12,7 @@ from typing import Callable, Optional
 os.environ.setdefault("QT_API", "pyside6")
 
 import numpy as np
+import cv2
 from PySide6.QtCore import Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QCloseEvent, QImage, QPixmap
 from PySide6.QtWidgets import (
@@ -43,7 +44,7 @@ from vision_tuner.trials import Recorder, Sample, TrialAborted, TrialRunner
 from vision_tuner.vision import VisionEngine, VisionMetrics, overlay
 
 
-pg.setConfigOptions(antialias=True, background="#14161a", foreground="#d8dce3")
+pg.setConfigOptions(antialias=False, background="#14161a", foreground="#d8dce3")
 
 
 class TrialThread(QThread):
@@ -96,6 +97,8 @@ class MainWindow(QMainWindow):
         self._cmd = np.zeros(self._live_n)
         self._i = 0
         self._filled = 0
+        self._last_preview = 0.0
+        self._plot_tick = 0
         self._report: Optional[TunerReport] = None
 
         self._build()
@@ -103,7 +106,7 @@ class MainWindow(QMainWindow):
         self.status_ready.connect(self._show_status)
 
         self._ui_timer = QTimer(self)
-        self._ui_timer.setInterval(50)
+        self._ui_timer.setInterval(120)
         self._ui_timer.timeout.connect(self._tick_plots)
         self._ui_timer.start()
 
@@ -215,6 +218,8 @@ class MainWindow(QMainWindow):
         self.btn_irun.clicked.connect(lambda: self._start_trial("IRUN", self._job_irun))
         self.btn_pt_scale = QPushButton("Tele pan scale")
         self.btn_pt_scale.clicked.connect(lambda: self._start_trial("tele pan scale", self._job_pt_scale))
+        self.btn_repeat = QPushButton("Preset repeat")
+        self.btn_repeat.clicked.connect(self._run_repeat)
         self.btn_full = QPushButton("Full auto suite")
         self.btn_full.setStyleSheet("font-weight: 700; padding: 8px;")
         self.btn_full.clicked.connect(self._run_full)
@@ -227,7 +232,7 @@ class MainWindow(QMainWindow):
             self.btn_stop, self.btn_home, self.btn_abort,
             self.btn_still, self.btn_sweep_pan, self.btn_sweep_tilt, self.btn_sweep_zoom,
             self.btn_range_pan, self.btn_range_tilt, self.btn_range_zoom,
-            self.btn_goto, self.btn_irun, self.btn_pt_scale, self.btn_full, self.btn_export,
+            self.btn_goto, self.btn_irun, self.btn_pt_scale, self.btn_repeat, self.btn_full, self.btn_export,
         ]
         for i, b in enumerate(btns):
             grid.addWidget(b, i // 4, i % 4)
@@ -258,14 +263,33 @@ class MainWindow(QMainWindow):
         for p in (self.p_flow, self.p_jit, self.p_pos, self.p_cmd):
             p.showGrid(x=True, y=True, alpha=0.2)
             p.setLabel("bottom", "t (s)")
-        self.c_flow = self.p_flow.plot(pen=pg.mkPen("#6ee7b7", width=2))
-        self.c_jit = self.p_jit.plot(pen=pg.mkPen("#fbbf24", width=2))
-        self.c_pan = self.p_pos.plot(pen=pg.mkPen("#93c5fd", width=2), name="pan")
-        self.c_tilt = self.p_pos.plot(pen=pg.mkPen("#f9a8d4", width=2), name="tilt")
-        self.c_zoom = self.p_pos.plot(pen=pg.mkPen("#fdba74", width=2), name="zoom")
+            try:
+                p.setDownsampling(mode="peak", auto=True)
+                p.setClipToView(True)
+            except Exception:
+                pass
+            p.enableAutoRange(x=False)
+        live_pen = lambda c: pg.mkPen(c, width=1)
+        self.c_flow = self._live_curve(self.p_flow, live_pen("#6ee7b7"))
+        self.c_jit = self._live_curve(self.p_jit, live_pen("#fbbf24"))
+        self.c_pan = self._live_curve(self.p_pos, live_pen("#93c5fd"), name="pan")
+        self.c_tilt = self._live_curve(self.p_pos, live_pen("#f9a8d4"), name="tilt")
+        self.c_zoom = self._live_curve(self.p_pos, live_pen("#fdba74"), name="zoom")
         self.p_pos.addLegend(offset=(8, 8))
-        self.c_cmd = self.p_cmd.plot(pen=pg.mkPen("#c4b5fd", width=2))
+        self.c_cmd = self._live_curve(self.p_cmd, live_pen("#c4b5fd"))
         return w
+
+    def _live_curve(self, plot, pen, name=None):
+        kw = {"pen": pen}
+        if name:
+            kw["name"] = name
+        c = plot.plot(**kw)
+        try:
+            c.setClipToView(True)
+            c.setDownsampling(auto=True, method="peak")
+        except Exception:
+            pass
+        return c
 
     def _sweep_plots(self) -> QWidget:
         w = pg.GraphicsLayoutWidget()
@@ -306,6 +330,7 @@ class MainWindow(QMainWindow):
             lambda: self._metrics,
             self._abort.is_set,
             lambda msg: self._trial.log.emit(msg) if self._trial else self._log(msg),
+            latest_gray=self.vision.snapshot_gray,
         )
 
     def _job_home(self) -> TunerReport:
@@ -364,6 +389,11 @@ class MainWindow(QMainWindow):
             self.ctl.stop()
         return r.report
 
+    def _job_repeat(self) -> TunerReport:
+        r = self._runner()
+        r.preset_repeatability()
+        return r.report
+
     def _job_full(self) -> TunerReport:
         r = self._runner()
         return r.full_suite()
@@ -390,6 +420,19 @@ class MainWindow(QMainWindow):
         ) != QMessageBox.StandardButton.Yes:
             return
         self._start_trial("full suite", self._job_full)
+
+    def _run_repeat(self) -> None:
+        if QMessageBox.question(
+            self,
+            "Preset repeatability",
+            "GOTO the first saved preset many times: pan, then tilt, then zoom, "
+            "then pan+tilt, then all three.\n\n"
+            "Each stage leaves the shot (~260 pan/tilt or ~140 zoom steps) from below "
+            "and from above (backlash take-up), then recalls.\n\n"
+            "Does not overwrite presets. Stay near the rig. Video must be running.",
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        self._start_trial("preset repeat", self._job_repeat)
 
     @Slot(object)
     def _trial_done(self, report: TunerReport) -> None:
@@ -420,6 +463,7 @@ class MainWindow(QMainWindow):
                 not report.sweep and not report.ranges
                 and report.goto is None and not report.irun
                 and report.zoom_pt_scale is None
+                and report.repeatability is None
             )
             if not stillness_only:
                 if report.sweep:
@@ -438,6 +482,8 @@ class MainWindow(QMainWindow):
                     report.irun = list(self._report.irun)
                 if report.zoom_pt_scale is None:
                     report.zoom_pt_scale = self._report.zoom_pt_scale
+                if report.repeatability is None:
+                    report.repeatability = self._report.repeatability
                 if report.latency_s <= 0:
                     report.latency_s = self._report.latency_s
                 report.notes = list(dict.fromkeys(self._report.notes + report.notes))
@@ -475,6 +521,9 @@ class MainWindow(QMainWindow):
                     xs.append(getattr(s, r.axis))
                     ys.append(s.vis_px_s(r.axis))
             if xs:
+                if len(xs) > 600:
+                    k = max(1, len(xs) // 600)
+                    xs, ys = xs[::k], ys[::k]
                 self.p_range.plot(xs, ys, pen=pg.mkPen(colors[r.axis], width=2), name=f"{r.axis} {r.reason}")
         self.p_goto.clear()
         self.p_goto.addLegend()
@@ -489,6 +538,9 @@ class MainWindow(QMainWindow):
                     ts.append(s.t - t0)
                     vs.append(s.vis_px_s())
             if ts:
+                if len(ts) > 600:
+                    k = max(1, len(ts) // 600)
+                    ts, vs = ts[::k], vs[::k]
                 self.c_goto.setData(ts, vs)
                 g = report.goto
                 dash = pg.mkPen("#93c5fd", style=Qt.PenStyle.DashLine)
@@ -626,11 +678,26 @@ class MainWindow(QMainWindow):
             "Z": f"{st.zoom:.0f}",
             "cmd": f"{cmd['pan']:.0f},{cmd['tilt']:.0f},{cmd['zoom']:.0f}",
         }
-        vis = overlay(frame, m, hud)
+        now = time.perf_counter()
+        paint = now - self._last_preview >= 0.09
+        vis = None
+        if paint:
+            pv = frame
+            if pv.shape[1] > 960:
+                s = 960.0 / float(pv.shape[1])
+                pv = cv2.resize(
+                    pv,
+                    (960, max(1, int(pv.shape[0] * s))),
+                    interpolation=cv2.INTER_AREA,
+                )
+            vis = overlay(pv, m, hud)
+            self._last_preview = now
         with self._lock:
-            self._frame = vis
             self._metrics = m
-        self.frame_ready.emit()
+            if vis is not None:
+                self._frame = vis
+        if paint:
+            self.frame_ready.emit()
 
     @Slot()
     def _show_frame(self) -> None:
@@ -643,7 +710,7 @@ class MainWindow(QMainWindow):
         pix = QPixmap.fromImage(img).scaled(
             self.preview.size(),
             Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
+            Qt.TransformationMode.FastTransformation,
         )
         self.preview.setPixmap(pix)
 
@@ -677,8 +744,11 @@ class MainWindow(QMainWindow):
         n = self._filled
         if n < 4:
             return
+        if self.tabs.currentIndex() != 0:
+            return
         i = self._i
-        sl = np.arange(i - n, i)
+        step = max(1, n // 280)
+        sl = np.arange(i - n, i, step)
         idx = sl % self._live_n
         t = self._t[idx]
         self.c_flow.setData(t, self._flow[idx])
@@ -687,6 +757,11 @@ class MainWindow(QMainWindow):
         self.c_tilt.setData(t, self._tilt[idx])
         self.c_zoom.setData(t, self._zoom[idx])
         self.c_cmd.setData(t, self._cmd[idx])
+        self._plot_tick += 1
+        if self._plot_tick % 8 == 1:
+            for p in (self.p_flow, self.p_jit, self.p_pos, self.p_cmd):
+                p.enableAutoRange(axis="y", enable=True)
+                p.enableAutoRange(axis="y", enable=False)
 
     def export_run(self) -> None:
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")

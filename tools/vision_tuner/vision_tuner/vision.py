@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Optional
 
@@ -35,16 +36,33 @@ class VisionMetrics:
         return max(self.px_per_s, self.zoom_px_s)
 
 
+@dataclass
+class FrameDelta:
+    dx_px: float = 0.0
+    dy_px: float = 0.0
+    mag_px: float = 0.0
+    scale: float = 1.0
+    ncc: float = 0.0
+    texture: float = 0.0
+
+
 class VisionEngine:
     def __init__(self):
         self._prev_gray: Optional[np.ndarray] = None
         self._last_t: Optional[float] = None
         self._grid: Optional[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = None
+        self._snap_gray: Optional[np.ndarray] = None
 
     def reset(self) -> None:
         self._prev_gray = None
         self._last_t = None
         self._grid = None
+        self._snap_gray = None
+
+    def snapshot_gray(self) -> Optional[np.ndarray]:
+        if self._snap_gray is None:
+            return None
+        return self._snap_gray.copy()
 
     def process(self, bgr: np.ndarray, t: float) -> VisionMetrics:
         gray_full = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
@@ -58,6 +76,7 @@ class VisionEngine:
         texture = float(np.mean(cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3) ** 2))
         sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
         m = VisionMetrics(sharpness=sharpness, texture=texture, low_texture=texture < TEXTURE_MIN)
+        self._snap_gray = gray
 
         if self._prev_gray is None or self._prev_gray.shape != gray.shape or self._last_t is None:
             self._prev_gray = gray
@@ -118,6 +137,42 @@ class VisionEngine:
         self._prev_gray = gray
         self._last_t = t
         return m
+
+
+def compare_frames(ref: np.ndarray, cur: np.ndarray) -> FrameDelta:
+    """Rest-frame residual: translation (pan/tilt) and scale (zoom) vs a reference grab."""
+    if ref.ndim == 3:
+        ref = cv2.cvtColor(ref, cv2.COLOR_BGR2GRAY)
+    if cur.ndim == 3:
+        cur = cv2.cvtColor(cur, cv2.COLOR_BGR2GRAY)
+    if cur.shape != ref.shape:
+        cur = cv2.resize(cur, (ref.shape[1], ref.shape[0]), interpolation=cv2.INTER_AREA)
+    a = np.float32(ref)
+    b = np.float32(cur)
+    (dx, dy), _resp = cv2.phaseCorrelate(a, b)
+    mag = float(math.hypot(dx, dy))
+    h, w = ref.shape
+    shift_x = int(round(-dx))
+    shift_y = int(round(-dy))
+    aligned = np.roll(np.roll(cur, shift_y, 0), shift_x, 1)
+    cy, cx = h * 0.5, w * 0.5
+    maxr = min(cx, cy) * 0.48
+    flags = cv2.WARP_POLAR_LOG | cv2.INTER_LINEAR
+    lp0 = cv2.warpPolar(ref, (256, 128), (cx, cy), maxr, flags)
+    lp1 = cv2.warpPolar(aligned, (256, 128), (cx, cy), maxr, flags)
+    (_ang, rho), _ = cv2.phaseCorrelate(np.float32(lp0), np.float32(lp1))
+    scale = float(math.exp(rho * math.log(max(maxr, 2.0)) / max(lp0.shape[0] - 1, 1)))
+    if not 0.45 <= scale <= 2.2:
+        scale = 1.0
+    y0, x0 = h // 8, w // 8
+    rcrop = ref[y0 : h - y0, x0 : w - x0]
+    acrop = aligned[y0 : h - y0, x0 : w - x0]
+    try:
+        ncc = float(cv2.matchTemplate(rcrop, acrop, cv2.TM_CCOEFF_NORMED).max())
+    except cv2.error:
+        ncc = 0.0
+    tex = float(np.mean(cv2.Sobel(ref, cv2.CV_32F, 1, 0, ksize=3) ** 2))
+    return FrameDelta(dx_px=float(dx), dy_px=float(dy), mag_px=mag, scale=scale, ncc=ncc, texture=tex)
 
 
 def overlay(bgr: np.ndarray, metrics: VisionMetrics, hud: dict) -> np.ndarray:

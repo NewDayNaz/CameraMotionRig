@@ -39,7 +39,11 @@ Use
 6. GOTO duration briefly enables preset automations, recalls the first valid
    preset, then mutes them again.
 7. Full auto suite runs sweeps, zoom crawl, GOTO, pan IRUN, and tele pan scale.
-8. Suggestions tab compares measurements to current firmware constants.
+8. **Preset repeat** GOTOs the first saved shot from pan, then tilt, then zoom,
+   then pan+tilt, then all three. Each stage approaches from below (no take-up)
+   and from above (uni-directional backlash). Suggestions tab has a paste block
+   for the LLM. Does not overwrite presets.
+9. Suggestions tab compares measurements to current firmware constants.
    Export run writes CSV + JSON + suggestions.txt under tools/vision_tuner/runs/.
 
 NDI can score max speed (done), pan IRUN (lost steps vs current), and

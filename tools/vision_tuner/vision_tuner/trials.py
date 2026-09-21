@@ -9,15 +9,22 @@ from vision_tuner.analyze import (
     GotoResult,
     IrunPoint,
     RangeResult,
+    RepeatCycle,
+    RepeatStage,
+    RepeatabilityReport,
     SweepPoint,
     TunerReport,
     ZoomPtScaleResult,
+    build_repeat_hypotheses,
+    format_repeatability,
     suggest_zoom_pt_scale,
 )
 from vision_tuner.config import (
     AXIS_MAX_RANGE,
     AXIS_MAX_VEL,
     FIRMWARE,
+    REPEAT_EXCURSION,
+    REPEAT_LOOPS,
     SWEEP_MEASURE_S,
     SWEEP_SPEEDS,
     SWEEP_SPINUP_S,
@@ -25,7 +32,7 @@ from vision_tuner.config import (
     TUNER_TRAVEL_BUDGET,
 )
 from vision_tuner.controller import Controller, RigStatus
-from vision_tuner.vision import VisionMetrics
+from vision_tuner.vision import VisionMetrics, compare_frames
 
 
 @dataclass
@@ -95,10 +102,12 @@ class TrialRunner:
         latest_metrics: Callable[[], Optional[VisionMetrics]],
         should_abort: CheckFn,
         log: LogFn,
+        latest_gray: Optional[Callable] = None,
     ):
         self.ctl = ctl
         self.rec = rec
         self.latest_metrics = latest_metrics
+        self.latest_gray = latest_gray
         self.should_abort = should_abort
         self.log = log
         self.report = TunerReport()
@@ -763,6 +772,166 @@ class TrialRunner:
         result.note = why if not note else f"{note} {why}"
         self.report.zoom_pt_scale = result
         self.log(f"ZOOM_PT_SCALE_MIN {why}")
+        return result
+
+    def _grab_gray(self):
+        if not self.latest_gray:
+            return None
+        return self.latest_gray()
+
+    def _wait_goto(self, idx: int, timeout: float = 28.0) -> float:
+        t0 = time.perf_counter()
+        resp = self.ctl.goto_preset(idx)
+        if str(resp.get("status")) != "ok":
+            raise TrialAborted(str(resp.get("error") or "GOTO refused"))
+        seen = False
+        while time.perf_counter() - t0 < timeout:
+            self._abort_if()
+            st = self._status()
+            if st.moving:
+                seen = True
+            elif seen or (time.perf_counter() - t0 > 1.2 and not st.moving):
+                break
+            time.sleep(0.05)
+        self.wait_for_image_still(4.0)
+        self._sleep(0.9)
+        return time.perf_counter() - t0
+
+    def _nudge_off_preset(self, axes: list[str], target: dict[str, float], from_above: bool) -> None:
+        for axis in axes:
+            need = REPEAT_EXCURSION[axis]
+            tgt = target[axis]
+            sign = 1.0 if from_above else -1.0
+            speed = 140.0 if axis != "zoom" else 80.0
+            self.log(
+                f"  nudge {axis} {'above' if from_above else 'below'} target "
+                f"{tgt:.0f} by ~{need:.0f} steps"
+            )
+            self._vel(axis, sign * speed)
+            t0 = time.perf_counter()
+            try:
+                while time.perf_counter() - t0 < need / max(speed, 1.0) + 2.5:
+                    self._abort_if()
+                    st = self._status(zoom_safety=(axis == "zoom"))
+                    pos = st.pos(axis)
+                    if abs(pos - tgt) >= need * 0.85:
+                        if from_above and pos > tgt:
+                            break
+                        if (not from_above) and pos < tgt:
+                            break
+                    if abs(pos - tgt) >= TUNER_TRAVEL_BUDGET[axis]:
+                        break
+                    if axis == "zoom" and st.pwm_hit:
+                        break
+                    time.sleep(0.05)
+            finally:
+                self.ctl.stop()
+            self._sleep(0.12)
+
+    def preset_repeatability(self, index: Optional[int] = None) -> RepeatabilityReport:
+        """GOTO a saved shot from pan, tilt, zoom, then stacked moves. Does not overwrite presets."""
+        presets = self.ctl.presets()
+        target_p = None
+        if index is not None:
+            for p in presets:
+                if int(p.get("index", -1)) == index and p.get("valid"):
+                    target_p = p
+                    break
+        else:
+            for p in presets:
+                if int(p.get("index", 0)) >= 1 and p.get("valid"):
+                    target_p = p
+                    break
+        if not target_p:
+            raise TrialAborted("no valid preset — SAVE a shot on the ESP32 first")
+        idx = int(target_p["index"])
+        raw = self.ctl.get_preset(idx)
+        body = raw.get("preset") or target_p
+        pos = list(body.get("pos") or [0, 0, 0])
+        while len(pos) < 3:
+            pos.append(0.0)
+        target = {"pan": float(pos[0]), "tilt": float(pos[1]), "zoom": float(pos[2])}
+        name = str(body.get("name") or target_p.get("name") or f"#{idx}")
+        dur = float(body.get("duration_s") or 0.0)
+        st = self._status()
+        if not st.homed:
+            self.wait_home()
+        self.stillness_baseline()
+        self.rec.trial_name = f"repeat-{idx}"
+        self.log(f"Repeatability vs preset {idx} {name!r}  counts {target}")
+        prev = bool(self._status().preset_recall)
+        self.ctl.set_preset_recall(True)
+        result = RepeatabilityReport(
+            preset_index=idx,
+            preset_name=name,
+            target_pan=target["pan"],
+            target_tilt=target["tilt"],
+            target_zoom=target["zoom"],
+            duration_s=dur,
+        )
+        try:
+            self.log("Initial GOTO for the reference grab")
+            self._wait_goto(idx)
+            ref = self._grab_gray()
+            if ref is None:
+                raise TrialAborted("no NDI frame for reference — start video first")
+            stages = [
+                ("pan", ["pan"]),
+                ("tilt", ["tilt"]),
+                ("zoom", ["zoom"]),
+                ("pan+tilt", ["pan", "tilt"]),
+                ("pan+tilt+zoom", ["pan", "tilt", "zoom"]),
+            ]
+            n = 0
+            for stage_name, axes in stages:
+                stage = RepeatStage(name=stage_name, axes=list(axes))
+                self.log(f"--- stage {stage_name} ---")
+                for approach in ("from_below", "from_above"):
+                    for _loop in range(REPEAT_LOOPS):
+                        n += 1
+                        self._nudge_off_preset(axes, target, from_above=(approach == "from_above"))
+                        settle = self._wait_goto(idx)
+                        st1 = self._status()
+                        cur = self._grab_gray()
+                        if cur is None:
+                            raise TrialAborted("lost NDI during repeatability")
+                        delta = compare_frames(ref, cur)
+                        cyc = RepeatCycle(
+                            stage=stage_name,
+                            cycle=n,
+                            approach=approach,
+                            axes=list(axes),
+                            dx_px=delta.dx_px,
+                            dy_px=delta.dy_px,
+                            mag_px=delta.mag_px,
+                            scale=delta.scale,
+                            ncc=delta.ncc,
+                            fw_err_pan=st1.pan - target["pan"],
+                            fw_err_tilt=st1.tilt - target["tilt"],
+                            fw_err_zoom=st1.zoom - target["zoom"],
+                            settle_s=settle,
+                        )
+                        stage.cycles.append(cyc)
+                        self.log(
+                            f"  {approach} mag={delta.mag_px:.2f}px scale={delta.scale:.4f} "
+                            f"ncc={delta.ncc:.3f} fw P{cyc.fw_err_pan:+.0f}/T{cyc.fw_err_tilt:+.0f}/Z{cyc.fw_err_zoom:+.0f}"
+                        )
+                result.stages.append(stage)
+                self.log("  re-lock from_below so the next stage does not inherit pan error")
+                self._nudge_off_preset(list(axes), target, from_above=False)
+                self._wait_goto(idx)
+        finally:
+            self.ctl.stop()
+            try:
+                self.ctl.set_preset_recall(prev)
+            except Exception:
+                pass
+        result.hypotheses = build_repeat_hypotheses(result)
+        result.llm_block = format_repeatability(result)
+        self.report.repeatability = result
+        self.report.notes.append(
+            "Repeatability does not overwrite presets. Jog stays ~260/140 steps off the saved shot."
+        )
         return result
 
     def full_suite(self, do_range: bool = True, do_goto: bool = True) -> TunerReport:
