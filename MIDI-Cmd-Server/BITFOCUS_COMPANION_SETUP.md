@@ -12,8 +12,50 @@ This guide explains how to configure Bitfocus Companion to recall camera presets
 ## Available Presets
 
 The controller supports 16 presets (0-15):
-- **Preset 0:** Home position (0,0,0)
-- **Presets 1-15:** User-defined camera positions
+- **Preset 0:** Home position (0,0,0), name `Home`
+- **Presets 1-15:** User-defined camera positions with optional names (set in the web UI)
+
+List names and durations:
+
+**GET** `http://<CONTROLLER_IP>/api/presets`
+
+```json
+{
+  "status": "ok",
+  "presets": [
+    {"index": 1, "valid": true, "name": "pulpit", "duration_s": 2.0, "pos": [-1200, -400, 200]},
+    {"index": 2, "valid": false, "name": "", "duration_s": 0}
+  ]
+}
+```
+
+Label Companion buttons with those names. Recall still uses the numeric `index`. Duration is stored on the controller (seconds for the whole move); Companion does not need to send speed.
+
+## Toggle preset automations (manual override)
+
+Turn this **off** when you want to jog the camera yourself. MIDI, Companion, web, and serial GOTO are ignored until you turn it back **on**. Jog, Stop, Home, and Save still work. The setting is stored on the controller (survives reboot).
+
+**GET** `http://<CONTROLLER_IP>/api/preset/recall` — `{"status":"ok","enabled":true}`
+
+**POST** `http://<CONTROLLER_IP>/api/preset/recall`
+
+Toggle (best for one Stream Deck button):
+
+```json
+{"toggle": true}
+```
+
+Or set explicitly:
+
+```json
+{"enabled": false}
+```
+
+`POST /api/command` with `{"command":"preset_recall_toggle"}` does the same.
+
+Poll `GET /api/positions` and read `preset_recall` (true/false) to color the button. Green = automations on, amber = manual.
+
+MIDI note **16** on channel 1 also toggles this (restart `camera_midi.js` after pulling the change).
 
 ## Bitfocus Companion Configuration
 
