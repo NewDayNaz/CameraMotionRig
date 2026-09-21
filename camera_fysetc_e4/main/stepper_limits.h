@@ -39,7 +39,7 @@
 #define HOMING_ZOOM_VELOCITY 50.0f
 
 #define HOMING_PAN_SLOW_VELOCITY  34.0f
-#define HOMING_TILT_SLOW_VELOCITY 60.0f
+#define HOMING_TILT_SLOW_VELOCITY 85.0f
 #define HOMING_ZOOM_SLOW_VELOCITY 25.0f
 
 #define HOMING_PAN_DIRECTION  1
@@ -58,7 +58,7 @@
 #define HOME_BACKOFF_EXTRA_STEPS     48
 #define HOME_PULLOFF_MAX_STEPS      600
 /* Tilt magnet/sensor lobe is wider — needs more travel to leave the field. */
-#define HOME_TILT_PULLOFF_STEPS          120
+#define HOME_TILT_PULLOFF_STEPS           80
 #define HOME_TILT_FINAL_PULLOFF_STEPS     64
 #define HOME_TILT_BACKOFF_EXTRA_STEPS     96
 #define HOME_TILT_PULLOFF_MAX_STEPS     1500
