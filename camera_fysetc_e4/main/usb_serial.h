@@ -10,6 +10,7 @@
  * - POS - Query current positions
  * - STATUS - Positions plus HOMED/MOVING/HOMING/FAULT flags
  * - STOP - Halt motion (aborts homing and clears homed)
+ * - AUTO [0|1] - Preset recall off/on (no argument toggles)
  */
 
 #ifndef USB_SERIAL_H
@@ -31,6 +32,7 @@ typedef enum {
     CMD_POS,        // POS
     CMD_STATUS,     // STATUS
     CMD_STOP,       // STOP
+    CMD_AUTO,       // AUTO [0|1] — preset recall on/off (no arg = toggle)
     CMD_LIMITS,     // LIMITS <axis> <min> <max>
     CMD_UNKNOWN
 } cmd_type_t;

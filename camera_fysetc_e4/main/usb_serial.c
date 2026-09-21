@@ -165,6 +165,14 @@ bool usb_serial_parse_command(parsed_cmd_t* cmd) {
         cmd->type = CMD_STATUS;
     } else if (strcmp(token, "STOP") == 0) {
         cmd->type = CMD_STOP;
+    } else if (strcmp(token, "AUTO") == 0) {
+        cmd->type = CMD_AUTO;
+        token = strtok_r(NULL, " \t", &saveptr);
+        if (token != NULL) {
+            cmd->preset_index = (uint8_t)atoi(token);
+        } else {
+            cmd->preset_index = 255;
+        }
     } else if (strcmp(token, "LIMITS") == 0) {
         cmd->type = CMD_LIMITS;
         token = strtok_r(NULL, " \t", &saveptr);
