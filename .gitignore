@@ -2,3 +2,5 @@
 wifi_config.h
 /*/managed_components/*/
 /camera_fysetc_e4/dependencies.lock
+__pycache__/
+tools/vision_tuner/runs/
