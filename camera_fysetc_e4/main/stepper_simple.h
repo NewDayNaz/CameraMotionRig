@@ -3,7 +3,8 @@
  * @brief Open-loop step/dir control with trusted origin and preset recall
  *
  * Position is counted STEP edges from a successful endstop home. SAVE/GOTO
- * are refused until all axes are homed. Software position is never snapped
+ * are refused until all axes are homed. GOTO is also ignored while preset
+ * automations are off (jog still works). Software position is never snapped
  * to a target.
  */
 
@@ -29,6 +30,8 @@ typedef struct {
     bool zoom_cal_valid;
     bool zoom_sg_live;
     uint16_t zoom_sg_stall_max;
+    /** False: GOTO from MIDI/Companion/web/serial is ignored; jog still works. */
+    bool preset_recall;
 } motion_status_t;
 
 void stepper_simple_init(void);
@@ -49,6 +52,9 @@ void stepper_simple_stop(void);
 
 bool stepper_simple_goto_preset(uint8_t preset_index);
 bool stepper_simple_save_preset(uint8_t preset_index);
+
+void stepper_simple_set_preset_recall(bool enabled);
+bool stepper_simple_preset_recall_enabled(void);
 
 void stepper_simple_home(void);
 bool stepper_simple_is_homing(void);
