@@ -29,13 +29,13 @@ It **does**:
 - Jog/preset slow in the last 40 steps before a software limit
 - Idle 6 h with no steps: HOME (no invented zero) then return to the held pose
 - Fault (do **not** zero) if a magnet is never seen within `MAX_*_RANGE_STEPS`, or if zoom PWM never rises
-- Constant-velocity preset recall with uni-directional backlash take-up
-- NVS presets 1–15 (preset 0 is virtual home at 0,0,0)
+- Duration-based preset recall with ease in/out and uni-directional backlash take-up
+- NVS presets 1–15 with optional names (preset 0 is virtual home at 0,0,0)
 - USB serial from the Raspberry Pi gamepad service
 - HTTP / web UI / MIDI `POST /api/preset/goto`
 - TMC2209 UART init: 8 microsteps; pan/tilt spreadCycle; zoom stealthChop; IRUN from NVS (defaults pan/tilt CS 11, zoom CS 5)
 
-It **does not** implement quintic/GPTimer cinematic planning. Smoothness is secondary to hitting the same pose.
+It **does not** implement quintic/GPTimer cinematic planning. GOTO eases with a trapezoid; destination is still counted pulses.
 
 ## Coordinate frame
 
@@ -73,7 +73,9 @@ Both lens ends raise `PWM_SCALE_SUM` (~84–86) vs free-run (~76–78) at 80 ste
 5. If UART is down, fall back to `HOME_ZOOM_DRIVE_STEPS` and invent zero — do not use this path if UART works
 6. If PWM never rises within the seek cap, **fault** zoom (do not invent origin)
 
-If a pan/tilt magnet is not found within range, that axis **faults**. Boot HOME then recalls preset 1 if stored. `STOP` during homing aborts and leaves origin untrusted.
+If a pan/tilt magnet is not found within range, that axis **faults**. The same for zoom if PWM never rises. A fault on any axis aborts HOME and clears `homed`. Boot HOME then recalls preset 1 if stored. `STOP` during homing aborts and leaves origin untrusted.
+
+Pan, tilt, and zoom home **at the same time**. Zoom seek ignores only a short startup window so a HOME from the pulled-off wide pose does not drive through the rubber before looking for PWM.
 
 ### Zoom calibration (web UI)
 
@@ -99,11 +101,13 @@ Calibrate `MAX_*_RANGE_STEPS` by homing, jogging to the far stop, and reading `S
 
 ## Presets
 
-Stored in NVS as software step counts plus an optional pan/tilt `max_speed`. Accel/decel fields are legacy and ignored. Zoom **never** uses a stored pan `max_speed` (that was skipping the zoom axis).
+Stored in NVS as software step counts, an optional short **name**, and a shared **duration** in seconds. Older blobs without name/duration still load. Accel/decel fields are unused. A leftover pan/tilt `max_speed` is only used when duration is 0 (legacy).
 
-Recall is constant velocity with a short overshoot so the last motion is always in the software-positive direction. Overshoot is clamped to soft limits. Arrival is counted pulses only — the counter is not written to the target.
+Recall times all axes to the same duration (0 = auto from default pan/tilt 127.5 and zoom 45 step/s). Speed is clamped per axis so a long pan cannot force zoom past its max. Moves ease in and out over ~0.4 s at cruise; a short overshoot keeps the last motion software-positive. Arrival is counted pulses only — the counter is not written to the target.
 
-SAVE is refused while moving or if not homed.
+SAVE is refused while moving or if not homed. Saving the current pose keeps the existing name and duration.
+
+**Preset automations** can be turned off from the web **Presets ON/OFF** button, Companion (`POST /api/preset/recall`), MIDI note 16, or serial `AUTO 0`. While off, every GOTO is ignored (including boot recall of preset 1). Jog, STOP, HOME, and SAVE still work. A move already in progress is halted. The flag is stored in NVS so it survives a reboot.
 
 ## USB serial (115200)
 
@@ -112,7 +116,8 @@ SAVE is refused while moving or if not homed.
 - `GOTO <n>` / `SAVE <n>` — presets 1–15 (`GOTO 0` is origin)
 - `HOME` / `STOP`
 - `POS` — `POS:pan,tilt,zoom`
-- `STATUS` — `STATUS:PAN:... TILT:... ZOOM:... HOMED:0|1 MOVING:0|1 HOMING:0|1 FAULT:ptz`
+- `STATUS` — `STATUS:PAN:... TILT:... ZOOM:... HOMED:0|1 MOVING:0|1 HOMING:0|1 FAULT:ptz AUTO:0|1`
+- `AUTO` / `AUTO 0` / `AUTO 1` — toggle or set preset automations
 
 Joystick port detection still matches `STATUS:PAN:` … `TILT:` … `ZOOM:`.
 
@@ -120,7 +125,11 @@ Joystick port detection still matches `STATUS:PAN:` … `TILT:` … `ZOOM:`.
 
 - `GET /api/positions` — positions, `homed`, `homing`, `moving`, `endstops`, `faults`, `idle_rehome_s`, `error`, zoom soft range / `%` of span, `pan_irun` / `tilt_irun` / `zoom_irun`
 - `POST /api/velocity`, `/api/command` (`home`/`stop`)
-- `POST /api/preset/goto` and `/save` — JSON `error` string if not homed / moving
+- `POST /api/preset/goto` and `/save` — JSON `error` string if not homed / moving; `name` when the slot has one. GOTO is ignored while preset automations are off.
+- `GET`/`POST /api/preset/recall` — `{"enabled": true|false}` or `{"toggle": true}`. Off = ignore MIDI/Companion/web/serial GOTO; jog and SAVE still work. Persisted in NVS.
+- `POST /api/command` — `home` / `stop` / `preset_recall_on` / `preset_recall_off` / `preset_recall_toggle`
+- `GET /api/presets` — all 16 slots (`index`, `name`, `duration_s`, `valid`, `pos`)
+- `GET /api/preset/get?index=` / `POST /api/preset/update` — name, duration, positions
 - `GET`/`POST /api/zoom-cal` — capture free/wide/tele, save, clear
 - `GET`/`POST /api/tmc/irun` — pan/tilt/zoom CS 3–16, persisted in NVS
 - Web UI at `/` — Drive (home, stop, joysticks, presets) on top; Setup wizards at the bottom (first-run, zoom cal, motor current, TMC debug). SAVE/GOTO blocked until HOME succeeds. Zoom endstop reads OPEN (there is none).
@@ -145,7 +154,7 @@ If **tilt sags** on a long hold, raise `TMC_IHOLD_TILT` in [`main/stepper_limits
 ## Motion notes
 
 - Update task period is 1 ms, so practical pan/tilt ceiling is ~1000 step/s
-- Preset defaults: pan/tilt 150 step/s, zoom 40 step/s
+- Preset defaults: pan/tilt 127.5 step/s, zoom 45 step/s (used when duration is 0). Jog pan/tilt scale with the **calibrated zoom span**, not `MAX_ZOOM_RANGE_STEPS`. Max jog is pan 722.5 / tilt 1020 step/s.
 - Jog is slew-limited; preset and homing use immediate target velocity
 - Recursive mutex serializes HTTP, UART, and the step loop
 - Watchdog is fed from the update task
