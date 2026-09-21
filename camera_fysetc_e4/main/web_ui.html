@@ -84,6 +84,7 @@ button { padding: 10px 20px; margin: 5px; font-size: 16px; cursor: pointer; bord
 <div style="margin-bottom: 10px;">
 <button class="btn-primary" onclick="sendCommand('home')">Home All Axes</button>
 <button class="btn-danger" onclick="sendCommand('stop')">Stop</button>
+<button id="btn_preset_recall" class="btn-primary" onclick="togglePresetRecall()">Presets ON</button>
 </div>
 <div class="joystick-container">
 <div class="joystick-wrapper">
@@ -100,6 +101,7 @@ button { padding: 10px 20px; margin: 5px; font-size: 16px; cursor: pointer; bord
 </div>
 <div class="section">
 <h2>Presets</h2>
+<p id="preset_recall_hint" style="color:#666; font-size:13px; margin:0 0 8px;"></p>
 <div class="preset-grid" id="preset_grid"></div>
 <div style="margin-top: 10px;">
 <button class="btn-warning" onclick="savePreset()">Save Current Position</button>
@@ -286,6 +288,10 @@ GCONF/CHOPCONF/version are read from the chip. IHOLD/IRUN/SGTHRS/TCOOLTHRS are w
 </div>
 <form id="preset_editor_form">
 <div class="form-group">
+<label>Name</label>
+<input type="text" id="editor_name" maxlength="23" placeholder="pulpit, choir, wide...">
+</div>
+<div class="form-group">
 <h3>Position</h3>
 <div class="form-row">
 <div><label>PAN:</label><input type="number" id="editor_pos_pan" step="0.1"></div>
@@ -294,15 +300,11 @@ GCONF/CHOPCONF/version are read from the chip. IHOLD/IRUN/SGTHRS/TCOOLTHRS are w
 </div>
 </div>
 <div class="form-group">
-<h3>Motion Parameters</h3>
-<div class="form-row">
-<div><label>Max Speed (0=auto):</label><input type="number" id="editor_max_speed" min="0" step="10" value="0"></div>
-<div><label>Accel Factor:</label><input type="number" id="editor_accel_factor" min="0.1" max="10" step="0.1" value="1.0" disabled title="Not used - preset recall is constant velocity"></div>
-<div><label>Decel Factor:</label><input type="number" id="editor_decel_factor" min="0.1" max="10" step="0.1" value="1.0" disabled title="Not used - preset recall is constant velocity"></div>
-</div>
+<h3>Move duration</h3>
+<label>Seconds (0 = auto)</label>
+<input type="number" id="editor_duration" min="0" max="30" step="0.1" value="0">
 <p style="color: #666; font-size: 12px; margin-top: 10px;">
-Max Speed: pan/tilt steps/sec for preset recall (0 = firmware default ~150). Zoom always uses the firmware zoom speed (~40) so a fast pan speed cannot skip the zoom axis.<br>
-Preset recall uses constant velocity with uni-directional approach. After flashing this firmware, HOME then re-save every preset.
+All axes finish together. 0 uses default pan/tilt ~128 and zoom ~45 step/s, timed to the slowest axis. 2 is a typical on-air move. Moves ease in and out; backlash take-up stays at the end. After flashing, HOME then re-save shots if framing drifted.
 </p>
 </div>
 <div style="margin-top: 20px; text-align: right;">
@@ -378,6 +380,9 @@ function updatePositions() {
         if (!homed && !homing) {
           line += ' - SAVE/GOTO blocked until HOME succeeds';
         }
+        if (data.preset_recall === false) {
+          line += ' | <span class="homed-no">PRESET AUTOMATIONS OFF</span>';
+        }
         if (typeof data.idle_rehome_s === 'number' && data.idle_rehome_s >= 0 && !homing && !moving) {
           const s = data.idle_rehome_s;
           const h = Math.floor(s / 3600);
@@ -394,6 +399,7 @@ function updatePositions() {
           ' | TILT ' + endstopLabel(!!data.endstops.tilt) +
           ' | ZOOM ' + endstopLabel(!!data.endstops.zoom);
       }
+      applyPresetRecallUi(data.preset_recall !== false);
     } else {
       console.error('Invalid position data:', data);
       posEl.textContent = 'Error: Invalid data';
@@ -586,6 +592,42 @@ function updateVelocities() {
 document.getElementById('pan_vel').addEventListener('input', updateVelocities);
 document.getElementById('tilt_vel').addEventListener('input', updateVelocities);
 document.getElementById('zoom_vel').addEventListener('input', updateVelocities);
+function applyPresetRecallUi(on) {
+  const btn = document.getElementById('btn_preset_recall');
+  if (btn) {
+    btn.textContent = on ? 'Presets ON' : 'Presets OFF';
+    btn.className = on ? 'btn-primary' : 'btn-warning';
+    btn.title = on
+      ? 'MIDI and Companion preset recalls are active'
+      : 'Preset recalls ignored — jog to frame manually';
+  }
+  const grid = document.getElementById('preset_grid');
+  if (grid) {
+    grid.style.opacity = on ? '1' : '0.5';
+  }
+  const hint = document.getElementById('preset_recall_hint');
+  if (hint) {
+    hint.textContent = on
+      ? ''
+      : 'Preset automations off. Jog to frame; MIDI/Companion GOTO is ignored. Save still works.';
+  }
+}
+function togglePresetRecall() {
+  fetch('/api/preset/recall', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ toggle: true })
+  }).then(r => r.json()).then(data => {
+    if (data.status === 'ok') {
+      applyPresetRecallUi(!!data.enabled);
+    } else {
+      alert('Error: ' + (data.error || 'Failed to toggle presets'));
+    }
+  }).catch(e => {
+    console.error('Toggle preset recall failed:', e);
+    alert('Failed to toggle presets');
+  });
+}
 function sendCommand(cmd, quiet) {
   fetch('/api/command', {
     method: 'POST',
@@ -618,7 +660,7 @@ function gotoPreset(idx) {
     body: JSON.stringify({index: idx})
   }).then(r => r.json()).then(data => {
     if (data.status === 'ok') {
-      alert('Moving to preset ' + idx);
+      alert('Moving to ' + (data.name ? (idx + ' ' + data.name) : ('preset ' + idx)));
     } else {
       alert('Error: ' + (data.error || 'Failed to move to preset'));
     }
@@ -651,20 +693,33 @@ function createPresetButtons() {
     console.error('preset_grid element not found');
     return;
   }
-  grid.innerHTML = '';
-  // Preset 0 is hidden (always 0,0,0), start from 1
-  for (let i = 1; i < 16; i++) {
-    const btn = document.createElement('button');
-    btn.className = 'btn-secondary preset-btn';
-    btn.textContent = 'Preset ' + i;
-    btn.onclick = () => gotoPreset(i);
-    const editBtn = document.createElement('button');
-    editBtn.className = 'preset-edit-btn';
-    editBtn.textContent = 'Edit';
-    editBtn.onclick = (e) => { e.stopPropagation(); openPresetEditor(i); };
-    btn.appendChild(editBtn);
-    grid.appendChild(btn);
-  }
+  const render = function(presets) {
+    grid.innerHTML = '';
+    for (let i = 1; i < 16; i++) {
+      const p = presets && presets[i];
+      const btn = document.createElement('button');
+      btn.className = 'btn-secondary preset-btn';
+      const name = p && p.name ? String(p.name).trim() : '';
+      btn.textContent = name ? (i + '  ' + name) : ('Preset ' + i);
+      if (!(p && p.valid)) {
+        btn.style.opacity = '0.55';
+      }
+      btn.onclick = () => gotoPreset(i);
+      const editBtn = document.createElement('button');
+      editBtn.className = 'preset-edit-btn';
+      editBtn.textContent = 'Edit';
+      editBtn.onclick = (e) => { e.stopPropagation(); openPresetEditor(i); };
+      btn.appendChild(editBtn);
+      grid.appendChild(btn);
+    }
+  };
+  fetch('/api/presets').then(r => r.json()).then(data => {
+    const byIdx = [];
+    if (data && data.presets) {
+      data.presets.forEach(function(p) { byIdx[p.index] = p; });
+    }
+    render(byIdx);
+  }).catch(() => render([]));
 }
 let currentEditingPreset = -1;
 function openPresetEditor(idx) {
@@ -679,17 +734,17 @@ function openPresetEditor(idx) {
   fetch('/api/preset/get?index=' + idx).then(r => r.json()).then(data => {
     if (data.status === 'ok' && data.preset) {
       const p = data.preset;
+      document.getElementById('editor_name').value = p.name || '';
       document.getElementById('editor_pos_pan').value = p.pos[0] || 0;
       document.getElementById('editor_pos_tilt').value = p.pos[1] || 0;
       document.getElementById('editor_pos_zoom').value = p.pos[2] || 0;
       document.getElementById('editor_duration').value = p.duration_s || 0;
-      document.getElementById('editor_speed_mult').value = p.speed_multiplier || 1.0;
     } else {
+      document.getElementById('editor_name').value = '';
       document.getElementById('editor_pos_pan').value = 0;
       document.getElementById('editor_pos_tilt').value = 0;
       document.getElementById('editor_pos_zoom').value = 0;
       document.getElementById('editor_duration').value = 0;
-      document.getElementById('editor_speed_mult').value = 1.0;
     }
   }).catch(e => {
     console.error('Failed to load preset:', e);
@@ -704,14 +759,13 @@ function savePresetEditor() {
   if (currentEditingPreset < 0) return;
   const preset = {
     index: currentEditingPreset,
+    name: document.getElementById('editor_name').value || '',
     pos: [
       parseFloat(document.getElementById('editor_pos_pan').value) || 0,
       parseFloat(document.getElementById('editor_pos_tilt').value) || 0,
       parseFloat(document.getElementById('editor_pos_zoom').value) || 0
     ],
-    max_speed: parseFloat(document.getElementById('editor_max_speed').value) || 0,
-    accel_factor: parseFloat(document.getElementById('editor_accel_factor').value) || 1.0,
-    decel_factor: parseFloat(document.getElementById('editor_decel_factor').value) || 1.0,
+    duration_s: parseFloat(document.getElementById('editor_duration').value) || 0,
     valid: true
   };
   fetch('/api/preset/update', {
@@ -722,6 +776,7 @@ function savePresetEditor() {
     if (data.status === 'ok') {
       alert('Preset ' + currentEditingPreset + ' updated!');
       closePresetEditor();
+      createPresetButtons();
     } else {
       alert('Error: ' + (data.error || 'Failed to update preset'));
     }
