@@ -51,7 +51,7 @@ static void send_full_status(void)
 {
     motion_status_t st;
     stepper_simple_get_status(&st);
-    usb_serial_send("STATUS:PAN:%.2f TILT:%.2f ZOOM:%.2f HOMED:%d MOVING:%d HOMING:%d FAULT:%d%d%d\n",
+    usb_serial_send("STATUS:PAN:%.2f TILT:%.2f ZOOM:%.2f HOMED:%d MOVING:%d HOMING:%d FAULT:%d%d%d AUTO:%d\n",
                     (float)st.position[AXIS_PAN],
                     (float)st.position[AXIS_TILT],
                     (float)st.position[AXIS_ZOOM],
@@ -60,7 +60,8 @@ static void send_full_status(void)
                     st.homing ? 1 : 0,
                     st.axis_fault[AXIS_PAN] ? 1 : 0,
                     st.axis_fault[AXIS_TILT] ? 1 : 0,
-                    st.axis_fault[AXIS_ZOOM] ? 1 : 0);
+                    st.axis_fault[AXIS_ZOOM] ? 1 : 0,
+                    st.preset_recall ? 1 : 0);
 }
 
 static void serial_task(void* pvParameters) {
@@ -123,6 +124,18 @@ static void serial_task(void* pvParameters) {
                     stepper_simple_stop();
                     usb_serial_send_status("STOPPED");
                     break;
+
+                case CMD_AUTO: {
+                    bool on;
+                    if (cmd.preset_index == 255) {
+                        on = !stepper_simple_preset_recall_enabled();
+                    } else {
+                        on = cmd.preset_index != 0;
+                    }
+                    stepper_simple_set_preset_recall(on);
+                    usb_serial_send("STATUS:AUTO:%d\n", on ? 1 : 0);
+                    break;
+                }
 
                 case CMD_UNKNOWN:
                     usb_serial_send_status("ERROR: Unknown command");
